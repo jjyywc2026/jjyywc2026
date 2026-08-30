@@ -271,6 +271,12 @@ class UserManagementTab(AdminBaseTab):
                 self._mini_btn("删除", ft.Icons.DELETE, ft.Colors.RED_500,
                                lambda e: self._delete_user(user)),
             ], spacing=4, alignment=ft.MainAxisAlignment.CENTER),
+            ft.Row([
+                self._mini_btn("重置二级密码", ft.Icons.LOCK_RESET, ft.Colors.DEEP_ORANGE_600,
+                               lambda e: self._reset_out_password(user)),
+                self._mini_btn("修改二级密码", ft.Icons.PASSWORD, ft.Colors.INDIGO_600,
+                               lambda e: self._change_out_password(user)),
+            ], spacing=4, alignment=ft.MainAxisAlignment.CENTER),
         ], spacing=4, tight=True)
 
         # 登录同步开关（直接用云端返回的sync_enabled，用户列表是SELECT *）
@@ -661,6 +667,58 @@ class UserManagementTab(AdminBaseTab):
         hashed = hashlib.md5(h1.encode()).hexdigest()
         self.db.execute("UPDATE users SET password=? WHERE user_id=?", [hashed, user_id])
         self._log_operation("change_password", "user", target_id=user_id)
+        await self._load_users()
+
+    # ---------- 重置二级密码 ----------
+    def _reset_out_password(self, user):
+        default_pwd = "123456"
+        self.confirm_and_run(
+            "重置二级密码", f"确定将「{user.get('username','')}」的二级密码重置为 {default_pwd} 吗？",
+            self._do_reset_out_password, user['user_id'], default_pwd,
+            success_msg=f"二级密码已重置为 {default_pwd}", loading_msg="重置中...")
+
+    async def _do_reset_out_password(self, user_id, new_pwd):
+        h1 = hashlib.md5(new_pwd.encode()).hexdigest()
+        hashed = hashlib.md5(h1.encode()).hexdigest()
+        self.db.execute("UPDATE users SET out_password=? WHERE user_id=?", [hashed, user_id])
+        self._log_operation("reset_out_password", "user", target_id=user_id, details="重置为123456")
+        admin_name = getattr(self.page, '_user_data', {}).get('username', '管理员')
+        self.db.add_user_message(user_id, '二级密码重置', f'【二级密码重置】你的二级密码已被{admin_name}重置\n新密码：123456', 'system')
+        await self._load_users()
+
+    # ---------- 修改二级密码 ----------
+    def _change_out_password(self, user):
+        fields = [
+            ("新二级密码", "new_pwd", "", "text"),
+            ("确认二级密码", "confirm_pwd", "", "text"),
+        ]
+        def on_submit(data):
+            pwd = data['new_pwd'].strip()
+            confirm = data['confirm_pwd'].strip()
+            if len(pwd) < 6 or len(pwd) > 20:
+                self.snack("二级密码长度需6-20位")
+                return
+            if ' ' in pwd:
+                self.snack("二级密码不能包含空格")
+                return
+            import re
+            if not re.match(r'^[a-zA-Z0-9]+$', pwd):
+                self.snack("二级密码只能包含英文字母和数字")
+                return
+            if pwd != confirm:
+                self.snack("两次二级密码不一致")
+                return
+            self.confirm_and_run(
+                "修改二级密码", f"确定修改「{user.get('username','')}」的二级密码吗？",
+                self._do_change_out_password, user['user_id'], pwd,
+                success_msg="二级密码修改成功", loading_msg="修改中...")
+        self.form_dialog(f"修改二级密码 - {user.get('username','')}", fields, on_submit)
+
+    async def _do_change_out_password(self, user_id, new_pwd):
+        h1 = hashlib.md5(new_pwd.encode()).hexdigest()
+        hashed = hashlib.md5(h1.encode()).hexdigest()
+        self.db.execute("UPDATE users SET out_password=? WHERE user_id=?", [hashed, user_id])
+        self._log_operation("change_out_password", "user", target_id=user_id)
         await self._load_users()
 
     # ---------- 变更状态（显示状态名） ----------
