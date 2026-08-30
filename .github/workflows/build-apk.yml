@@ -55,7 +55,6 @@ jobs:
             --project wordlearning \
             --product "单词学习" \
             --module-name main \
-            --icon assets/app_icon.png \
             --build-version ${{ env.VERSION }} \
             --build-number ${{ env.BUILD_NUMBER }} \
             --android-permissions INTERNET=True \
