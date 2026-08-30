@@ -1,0 +1,76 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Build artifacts
+build/
+dist/
+*.spec
+*.exe
+*.apk
+*.aab
+*.ipa
+
+# Sensitive config (NEVER commit)
+secret.key
+turso-config.json
+turso-config1.json
+assets/turso-config.json
+login_config.txt
+sync_state.json
+schema_cache.json
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+!assets/local_cache.db
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+apk_build_*.txt
+
+# Temp / test files
+eeee.py
+test_compat.py
+_git_commit.py
+_make_bundle_db.py
+_verify_db.py
+_final_check.py
+_prebuild_check.py
+_wait_build.py
+
+# Debug screenshots
+_screenshot*.png
+_d*.png
+_s*.png
+build_error*.png
+screenshot*.png
+
+# Runtime files
+startup_log.txt
+apk_build_pid.txt
+
+# Windows build scripts
+build.bat
+build_apk.bat
+
+# Empty storage dirs
+storage/
+
+# Debug & push scripts (never commit - may contain tokens)
+check_*.py
+push_*.py
+push_log*.txt
+commit_*.py
