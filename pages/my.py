@@ -45,7 +45,9 @@ class MyPage:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT username, user_type, score, level_id, reg_date, "
-                "user_status, sync_enabled, total_time, consecutive_login_days "
+                "user_status, sync_enabled, total_time, consecutive_login_days, "
+                "experience, total_stars, nickname, last_login_date, "
+                "evaluation_score, avg_evaluation_score "
                 "FROM users WHERE user_id = ?", [uid]
             ).fetchone()
             conn.close()
@@ -174,6 +176,13 @@ class MyPage:
         type_label = "管理员" if str(user_type) in ("1", "admin") else "普通用户"
         score = detail.get("score", self.user_data.get("score", 0))
         level = detail.get("level_id", self.user_data.get("level_id", 1))
+        experience = detail.get("experience", 0)
+        total_stars = detail.get("total_stars", 0)
+        # 保存可刷新的文本引用
+        self._score_text = ft.Text(str(score), size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_700)
+        self._level_text = ft.Text(f"Lv.{level}", size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN_700)
+        self._exp_text = ft.Text(str(experience), size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.ORANGE_700)
+        self._stars_text = ft.Text(str(total_stars), size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.AMBER_700)
         reg_date = str(detail.get("reg_date", "-"))[:10]
         status_val = detail.get("user_status", 0)
         try:
@@ -227,20 +236,22 @@ class MyPage:
                 ft.Row([
                     ft.Column([
                         ft.Text("积分", size=11, color=ft.Colors.GREY_500),
-                        ft.Text(str(score), size=18, weight=ft.FontWeight.BOLD,
-                                color=ft.Colors.BLUE_700)
+                        self._score_text,
                     ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, expand=True),
                     ft.Container(width=1, height=36, bgcolor=ft.Colors.GREY_200),
                     ft.Column([
                         ft.Text("等级", size=11, color=ft.Colors.GREY_500),
-                        ft.Text(f"Lv.{level}", size=18, weight=ft.FontWeight.BOLD,
-                                color=ft.Colors.GREEN_700)
+                        self._level_text,
                     ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, expand=True),
                     ft.Container(width=1, height=36, bgcolor=ft.Colors.GREY_200),
                     ft.Column([
-                        ft.Text("身份", size=11, color=ft.Colors.GREY_500),
-                        ft.Text(type_label, size=14, weight=ft.FontWeight.W_600,
-                                color=ft.Colors.PURPLE_700)
+                        ft.Text("经验", size=11, color=ft.Colors.GREY_500),
+                        self._exp_text,
+                    ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, expand=True),
+                    ft.Container(width=1, height=36, bgcolor=ft.Colors.GREY_200),
+                    ft.Column([
+                        ft.Text("星星", size=11, color=ft.Colors.GREY_500),
+                        self._stars_text,
                     ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, expand=True),
                 ], alignment=ft.MainAxisAlignment.SPACE_EVENLY),
                 ft.Row([
@@ -307,6 +318,20 @@ class MyPage:
             self._sync_count_ref.value = f"{info['table_count']} 张表 · {info['total_rows']} 条记录"
             self._sync_time_ref.update()
             self._sync_count_ref.update()
+            # 刷新用户卡数据（积分/等级/经验/星星）
+            try:
+                detail = self._get_user_detail()
+                if hasattr(self, '_score_text') and detail:
+                    self._score_text.value = str(detail.get("score", 0))
+                    self._level_text.value = f"Lv.{detail.get('level_id', 1)}"
+                    self._exp_text.value = str(detail.get("experience", 0))
+                    self._stars_text.value = str(detail.get("total_stars", 0))
+                    self._score_text.update()
+                    self._level_text.update()
+                    self._exp_text.update()
+                    self._stars_text.update()
+            except Exception:
+                pass
             self.page.open(ft.SnackBar(ft.Text(msg), duration=2500))
         except Exception as ex:
             self.page.open(ft.SnackBar(ft.Text(f"同步失败: {ex}"), duration=2500))
