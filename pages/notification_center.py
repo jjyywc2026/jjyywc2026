@@ -1,7 +1,5 @@
 # pages/notification_center.py
 import flet as ft
-import json
-from app_paths import get_app_dir
 
 # 消息类型 → (显示名, 图标, 颜色)
 TYPE_MAP = {
@@ -20,51 +18,38 @@ TYPE_MAP = {
 
 
 class NotificationCenter:
-    """消息通知中心（读取 user_messages 表）"""
+    """消息通知中心（读取云端 user_messages 表，is_read 字段跟踪已读）"""
 
     def __init__(self, page, user_data):
         self.page = page
         self.user_data = user_data
         self._list_view = None
-        self._read_ids = self._load_read_ids()
+        self._uid = self.user_data.get("id") or self.user_data.get("user_id")
 
-    def _load_read_ids(self):
-        try:
-            f = get_app_dir() / "notif_read.json"
-            if f.exists():
-                return set(json.loads(f.read_text(encoding="utf-8")))
-        except Exception:
-            pass
-        return set()
-
-    def _save_read_ids(self):
-        try:
-            f = get_app_dir() / "notif_read.json"
-            f.write_text(json.dumps(list(self._read_ids)), encoding="utf-8")
-        except Exception:
-            pass
+    def _get_db(self):
+        return getattr(self.page, '_db', None)
 
     def _get_messages(self):
         """从云端 user_messages 表获取当前用户的消息"""
-        uid = self.user_data.get("id") or self.user_data.get("user_id")
         messages = []
+        db = self._get_db()
+        if db is None:
+            return messages
         try:
-            db = getattr(self.page, '_db', None)
-            if db is None:
-                return messages
             rows = db.fetch_all(
-                """SELECT id, user_id, title, content, message_type, created_at
+                """SELECT id, user_id, title, content, message_type, created_at, is_read
                    FROM user_messages
                    WHERE user_id = ?
                    ORDER BY created_at DESC LIMIT 100""",
-                [uid]
+                [self._uid]
             )
             for r in (rows or []):
                 mtype = r.get('message_type', 'system')
                 tinfo = TYPE_MAP.get(mtype, TYPE_MAP['system'])
                 mid = r.get('id', 0)
+                is_read = bool(int(r.get('is_read', 0) or 0))
                 messages.append({
-                    'id': f"msg_{mid}",
+                    'id': mid,
                     'type': mtype,
                     'type_name': tinfo[0],
                     'icon': tinfo[1],
@@ -72,15 +57,26 @@ class NotificationCenter:
                     'title': r.get('title', ''),
                     'content': r.get('content', '') or '',
                     'time': str(r.get('created_at', ''))[:19],
+                    'is_read': is_read,
                 })
         except Exception as e:
             print(f"[notification] 获取消息失败: {e}")
         return messages
 
     def get_unread_count(self):
-        """获取未读消息数"""
-        messages = self._get_messages()
-        return sum(1 for m in messages if m['id'] not in self._read_ids)
+        """获取未读消息数（基于 is_read=0）"""
+        db = self._get_db()
+        if db is None:
+            return 0
+        try:
+            row = db.fetch_one(
+                "SELECT COUNT(*) as cnt FROM user_messages WHERE user_id = ? AND is_read = 0",
+                [self._uid]
+            )
+            return int(row.get('cnt', 0)) if row else 0
+        except Exception as e:
+            print(f"[notification] 未读数失败: {e}")
+            return 0
 
     def build(self):
         self._list_view = ft.ListView(spacing=6, expand=True, padding=ft.padding.all(12))
@@ -109,10 +105,9 @@ class NotificationCenter:
         messages = self._get_messages()
         tiles = []
         for m in messages:
-            is_read = m['id'] in self._read_ids
             # 未读红点
             dot = ft.Container(width=8, height=8, border_radius=4,
-                               bgcolor=ft.Colors.RED_500) if not is_read else ft.Container(width=8)
+                               bgcolor=ft.Colors.RED_500) if not m['is_read'] else ft.Container(width=8)
             # 类型标签
             type_tag = ft.Container(
                 content=ft.Text(m['type_name'], size=9, color=ft.Colors.WHITE,
@@ -126,6 +121,9 @@ class NotificationCenter:
             content_text = '\n'.join(content_lines[:4])
             if len(content_lines) > 4:
                 content_text += '\n...'
+            # 未读标题加粗
+            title_weight = ft.FontWeight.W_700 if not m['is_read'] else ft.FontWeight.W_500
+            title_color = ft.Colors.GREY_800 if not m['is_read'] else ft.Colors.GREY_500
 
             tiles.append(ft.Container(
                 content=ft.Row([
@@ -140,8 +138,8 @@ class NotificationCenter:
                     ft.Column([
                         ft.Row([
                             type_tag,
-                            ft.Text(m['title'], size=13, weight=ft.FontWeight.W_700,
-                                    color=ft.Colors.GREY_800, expand=True),
+                            ft.Text(m['title'], size=13, weight=title_weight,
+                                    color=title_color, expand=True),
                             dot,
                         ], spacing=6, tight=True),
                         ft.Text(content_text, size=11, color=ft.Colors.GREY_600,
@@ -167,14 +165,16 @@ class NotificationCenter:
         except Exception:
             pass
 
-    def _mark_read(self, mid):
-        self._read_ids.add(mid)
-        self._save_read_ids()
+    def _mark_read(self, message_id):
+        """点击消息 → 标记为已读并刷新"""
+        db = self._get_db()
+        if db:
+            db.mark_message_read(self._uid, message_id)
         self._render()
 
     def _mark_all_read(self):
-        messages = self._get_messages()
-        for m in messages:
-            self._read_ids.add(m['id'])
-        self._save_read_ids()
+        """全部已读"""
+        db = self._get_db()
+        if db:
+            db.mark_all_messages_read(self._uid)
         self._render()

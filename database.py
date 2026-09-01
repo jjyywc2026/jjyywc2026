@@ -320,3 +320,27 @@ class TursoClient:
         except Exception as e:
             print(f"[user_messages] 添加失败: {e}")
             return False
+
+    def mark_message_read(self, user_id, message_id):
+        """标记单条消息为已读"""
+        try:
+            self.execute(
+                "UPDATE user_messages SET is_read = 1, read_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
+                (message_id, user_id)
+            )
+            return True
+        except Exception as e:
+            print(f"[user_messages] 标记已读失败: {e}")
+            return False
+
+    def mark_all_messages_read(self, user_id):
+        """标记所有消息为已读"""
+        try:
+            self.execute(
+                "UPDATE user_messages SET is_read = 1, read_at = CURRENT_TIMESTAMP WHERE user_id = ? AND is_read = 0",
+                (user_id,)
+            )
+            return True
+        except Exception as e:
+            print(f"[user_messages] 标记全部已读失败: {e}")
+            return False
