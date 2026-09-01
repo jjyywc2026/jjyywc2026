@@ -347,8 +347,20 @@ class MyPage:
         dlg = ft.AlertDialog(
             content=ft.Container(content=nc.build(), width=380, height=520),
             actions_padding=8,
+            on_dismiss=lambda e: self._refresh_notif_badge(),
         )
         self.page.open(dlg)
+
+    def _refresh_notif_badge(self):
+        """弹窗关闭后刷新未读红点"""
+        nc = NotificationCenter(self.page, self.user_data)
+        unread = nc.get_unread_count()
+        if hasattr(self, '_notif_badge') and self._notif_badge:
+            self._notif_badge.content.value = str(unread)
+            self._notif_badge.visible = unread > 0
+        if hasattr(self, '_notif_subtitle') and self._notif_subtitle:
+            self._notif_subtitle.value = f"{unread}条未读" if unread > 0 else "查看奖励与系统通知"
+        self.page.update()
 
     # ============================================================
     # 修改密码
@@ -742,17 +754,31 @@ class MyPage:
         # 功能入口
         notif_center = NotificationCenter(self.page, self.user_data)
         unread = notif_center.get_unread_count()
-        notif_badge = ft.Container(
+        self._notif_badge = ft.Container(
             content=ft.Text(str(unread), size=10, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
             bgcolor=ft.Colors.RED_500, border_radius=10,
             padding=ft.padding.symmetric(horizontal=5, vertical=1),
             visible=unread > 0,
-        ) if unread > 0 else None
-        notif_tile = self._menu_tile(
-            ft.Icons.NOTIFICATIONS, ft.Colors.PURPLE_50, ft.Colors.PURPLE_600,
-            "消息通知", f"{unread}条未读" if unread > 0 else "查看奖励与系统通知",
-            lambda e: self._open_notifications(),
-            trailing=notif_badge,
+        )
+        self._notif_subtitle = ft.Text(
+            f"{unread}条未读" if unread > 0 else "查看奖励与系统通知",
+            size=11, color=ft.Colors.GREY_400,
+        )
+        notif_tile = ft.Container(
+            on_click=lambda e: self._open_notifications(),
+            bgcolor=ft.Colors.WHITE, border_radius=12,
+            padding=ft.padding.symmetric(horizontal=12, vertical=10),
+            content=ft.Row([
+                ft.Container(
+                    padding=ft.padding.all(8), bgcolor=ft.Colors.PURPLE_50, border_radius=10,
+                    content=ft.Icon(ft.Icons.NOTIFICATIONS, size=20, color=ft.Colors.PURPLE_600),
+                ),
+                ft.Column([
+                    ft.Text("消息通知", size=14, weight=ft.FontWeight.W_600, color=ft.Colors.GREY_800),
+                    self._notif_subtitle,
+                ], spacing=1, tight=True, expand=True),
+                self._notif_badge,
+            ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
         )
         pwd_tile = self._menu_tile(
             ft.Icons.LOCK, ft.Colors.RED_50, ft.Colors.RED_600,

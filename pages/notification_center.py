@@ -1,5 +1,6 @@
 # pages/notification_center.py
 import flet as ft
+from datetime import datetime, timedelta
 
 # 消息类型 → (显示名, 图标, 颜色)
 TYPE_MAP = {
@@ -9,11 +10,11 @@ TYPE_MAP = {
     'warning': ('警告提醒', ft.Icons.WARNING, ft.Colors.RED_600),
     'activity': ('活动通知', ft.Icons.EVENT, ft.Colors.GREEN_600),
     'gift': ('礼包发放', ft.Icons.REDEEM, ft.Colors.PURPLE_600),
-    'levelup': ('等级提升', ft.Icons.TRENDING_UP, ft.Colors.AMBER_600),
     'backpack': ('背包变更', ft.Icons.BACKPACK, ft.Colors.TEAL_600),
     'timelimit': ('时间限制', ft.Icons.TIMER, ft.Colors.INDIGO_600),
     'card': ('赋能卡', ft.Icons.CONFIRMATION_NUMBER, ft.Colors.PINK_600),
     'task': ('任务变更', ft.Icons.TASK_ALT, ft.Colors.CYAN_600),
+    'achievement': ('成就达成', ft.Icons.EMOJI_EVENTS, ft.Colors.AMBER_600),
 }
 
 
@@ -28,6 +29,11 @@ class NotificationCenter:
 
     def _get_db(self):
         return getattr(self.page, '_db', None)
+
+    def _fmt_time(self, raw):
+        if not raw:
+            return ''
+        return str(raw)[:19].replace('T', ' ')
 
     def _get_messages(self):
         """从云端 user_messages 表获取当前用户的消息"""
@@ -56,7 +62,7 @@ class NotificationCenter:
                     'color': tinfo[2],
                     'title': r.get('title', ''),
                     'content': r.get('content', '') or '',
-                    'time': str(r.get('created_at', ''))[:19],
+                    'time': self._fmt_time(r.get('created_at', '')),
                     'is_read': is_read,
                 })
         except Exception as e:

@@ -311,8 +311,8 @@ class TimeLimitsTab(AdminBaseTab):
                 allow_s = vals.get('use__computer_start_time', '00:00')
                 allow_e = vals.get('use__computer_end_time', '23:59')
                 admin_name = getattr(self.page, '_user_data', {}).get('username', '管理员')
-                detail = f"【时间限制更新】\n操作人：{admin_name}\n每日上限：{daily}分钟\n单次上限：{single}分钟\n冷却时间：{cool}分钟\n允许时段：{allow_s} ~ {allow_e}"
-                self.db.add_user_message(uid, '时间限制变更', detail, 'timelimit')
+                detail = f"每日上限：{daily}分钟 | 单次上限：{single}分钟\n冷却时间：{cool}分钟\n允许时段：{allow_s} ~ {allow_e}\n操作人：{admin_name}"
+                self.db.add_user_message(uid, '使用时间已调整', detail, 'timelimit')
 
             self.run_save_async(do_save, after_fn=lambda: self.page.run_task(self._load))
 

@@ -151,10 +151,10 @@ class TaskManagementTab(AdminBaseTab):
                 admin_name = getattr(self.page, '_user_data', {}).get('username', '管理员')
                 tinfo = self.db.fetch_one("SELECT name, target_count, reward_value, start_time, end_time FROM tasks WHERE id=?", [task_id])
                 if tinfo:
-                    detail = f"【任务{'启用' if active else '禁用'}】{tinfo.get('name','')}\n操作人：{admin_name}\n目标：{tinfo.get('target_count','?')}次\n奖励：{tinfo.get('reward_value',0)}积分\n时间：{tinfo.get('start_time','') or '不限'} ~ {tinfo.get('end_time','') or '不限'}"
+                    detail = f"{tinfo.get('name','')} 已{'启用' if active else '禁用'}\n目标：{tinfo.get('target_count','?')}次 | 奖励：{tinfo.get('reward_value',0)}积分\n有效期：{tinfo.get('start_time','') or '不限'} ~ {tinfo.get('end_time','') or '不限'}\n操作人：{admin_name}"
                 else:
-                    detail = f"【任务{'启用' if active else '禁用'}】{t.get('name','')}\n操作人：{admin_name}"
-                self.db.add_user_message(t['user_id'], '任务变更', detail, 'task')
+                    detail = f"{t.get('name','')} 已{'启用' if active else '禁用'}\n操作人：{admin_name}"
+                self.db.add_user_message(t['user_id'], '任务状态变更', detail, 'task')
             self.snack("已更新")
         except Exception as e:
             self.snack(f"更新失败: {e}")
@@ -255,8 +255,8 @@ class TaskManagementTab(AdminBaseTab):
                                         before_state=before, after_state=params)
                     if params.get('user_id', 0) != 0:
                         admin_name = getattr(self.page, '_user_data', {}).get('username', '管理员')
-                        detail = f"【任务更新】{name}\n操作人：{admin_name}\n目标：{params.get('target_count','?')}次\n奖励：{params.get('reward_value',0)}积分\n时间：{params.get('start_time','') or '不限'} ~ {params.get('end_time','') or '不限'}"
-                        self.db.add_user_message(params['user_id'], '任务变更', detail, 'task')
+                        detail = f"{name} 已更新\n目标：{params.get('target_count','?')}次 | 奖励：{params.get('reward_value',0)}积分\n有效期：{params.get('start_time','') or '不限'} ~ {params.get('end_time','') or '不限'}\n操作人：{admin_name}"
+                        self.db.add_user_message(params['user_id'], '任务已更新', detail, 'task')
                 else:
                     cols = ", ".join(params.keys())
                     ph = ", ".join("?" for _ in params)
@@ -266,8 +266,8 @@ class TaskManagementTab(AdminBaseTab):
                                         after_state=params)
                     if params.get('user_id', 0) != 0:
                         admin_name = getattr(self.page, '_user_data', {}).get('username', '管理员')
-                        detail = f"【新任务】{name}\n操作人：{admin_name}\n目标：{params.get('target_count','?')}次\n奖励：{params.get('reward_value',0)}积分\n时间：{params.get('start_time','') or '不限'} ~ {params.get('end_time','') or '不限'}\n快去完成吧！"
-                        self.db.add_user_message(params['user_id'], '新任务', detail, 'task')
+                        detail = f"新任务：{name}\n目标：{params.get('target_count','?')}次 | 奖励：{params.get('reward_value',0)}积分\n有效期：{params.get('start_time','') or '不限'} ~ {params.get('end_time','') or '不限'}\n快去完成吧！\n发布人：{admin_name}"
+                        self.db.add_user_message(params['user_id'], '新任务发布', detail, 'task')
 
             self.run_save_async(do_save, after_fn=lambda: self.page.run_task(self._load_tasks))
 
@@ -295,5 +295,5 @@ class TaskManagementTab(AdminBaseTab):
         if t and t.get('user_id', 0) != 0:
             admin_name = getattr(self.page, '_user_data', {}).get('username', '管理员')
             self.db.add_user_message(t['user_id'], '任务变更',
-                f"【任务删除】{t.get('name','')}\n操作人：{admin_name}\n该任务已被删除", 'task')
+                f"{t.get('name','')} 已删除\n操作人：{admin_name}", 'task')
         await self._load_tasks()

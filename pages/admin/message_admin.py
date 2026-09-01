@@ -1,5 +1,6 @@
 # pages/admin/message_admin.py
 import flet as ft
+from datetime import datetime, timedelta
 import asyncio
 from .base import AdminBaseTab
 
@@ -33,9 +34,10 @@ class MessageAdminTab(AdminBaseTab):
                 ft.dropdown.Option(key="announcement", text="系统公告"),
                 ft.dropdown.Option(key="system", text="系统通知"),
                 ft.dropdown.Option(key="reward", text="奖励通知"),
+                ft.dropdown.Option(key="gift", text="礼包发放"),
                 ft.dropdown.Option(key="warning", text="警告提醒"),
                 ft.dropdown.Option(key="activity", text="活动通知"),
-            ],
+                            ],
             value="announcement",
         )
         # 标题
@@ -98,6 +100,11 @@ class MessageAdminTab(AdminBaseTab):
     async def load_data(self):
         await self._reload()
 
+    @staticmethod
+    def _fmt_time(raw):
+        if not raw:
+            return ''
+        return str(raw)[:19].replace('T', ' ')
     async def _reload(self):
         import asyncio
         await asyncio.sleep(0.05)
@@ -137,19 +144,18 @@ class MessageAdminTab(AdminBaseTab):
             'reward': ft.Colors.ORANGE_600,
             'warning': ft.Colors.RED_600,
             'activity': ft.Colors.GREEN_600,
-            'reward': ft.Colors.ORANGE_600,
             'gift': ft.Colors.PURPLE_600,
-            'levelup': ft.Colors.AMBER_600,
+            'achievement': ft.Colors.AMBER_600,
             'backpack': ft.Colors.TEAL_600,
             'timelimit': ft.Colors.INDIGO_600,
-            'card': ft.Colors.PURPLE_600,
+            'card': ft.Colors.PINK_600,
             'task': ft.Colors.CYAN_600,
         }
         type_names = {
             'announcement': '公告', 'system': '系统', 'reward': '奖励',
             'warning': '警告', 'activity': '活动', 'gift': '礼包',
-            'levelup': '升级', 'backpack': '背包', 'timelimit': '时限',
-            'card': '赋能卡', 'task': '任务',
+'achievement': '成就', 'backpack': '背包',
+            'timelimit': '时限', 'card': '赋能卡', 'task': '任务',
         }
         tiles = []
         for m in msgs:
@@ -158,7 +164,7 @@ class MessageAdminTab(AdminBaseTab):
             title = m.get('title', '')
             content = m.get('content', '') or ''
             mtype = m.get('message_type', 'system')
-            created = str(m.get('created_at', ''))[:19]
+            created = self._fmt_time(m.get('created_at', ''))
             tcolor = type_colors.get(mtype, ft.Colors.GREY_500)
             tname = type_names.get(mtype, mtype)
             # 内容预览（截断）

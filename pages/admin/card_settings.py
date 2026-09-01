@@ -273,8 +273,8 @@ class CardSettingsTab(AdminBaseTab):
                 expire = vals.get('time_slot_card_expire_time', '23:59:59')
                 max_use = vals.get('max_use_until_time', '00:30')
                 admin_name = getattr(self.page, '_user_data', {}).get('username', '管理员')
-                detail = f"【赋能卡配置更新】\n操作人：{admin_name}\n每张提升：{inc}分钟\n提升上限：{mx}分钟\n每日过期：{expire}\n最长可用到次日：{max_use}"
-                self.db.add_user_message(self._current_uid, '赋能卡配置变更', detail, 'card')
+                detail = f"每张提升：{inc}分钟 | 提升上限：{mx}分钟\n每日过期：{expire} | 最长可用到次日：{max_use}\n操作人：{admin_name}"
+                self.db.add_user_message(self._current_uid, '赋能卡配置已更新', detail, 'card')
                 self.snack("保存成功")
                 self._close_dialog(dlg)
                 self.page.run_task(self._reload)
@@ -381,8 +381,8 @@ class CardSettingsTab(AdminBaseTab):
                 # 用户消息通知
                 status = '已启用' if en == 1 else '已禁用'
                 admin_name = getattr(self.page, '_user_data', {}).get('username', '管理员')
-                detail = f"【使用时间窗口】{status}\n操作人：{admin_name}\n时段：{start} ~ {end}"
-                self.db.add_user_message(self._current_uid, '时间窗口变更', detail, 'timelimit')
+                detail = f"时间窗口{status}\n时段：{start} ~ {end}\n操作人：{admin_name}"
+                self.db.add_user_message(self._current_uid, '使用时间窗口已调整', detail, 'timelimit')
                 self.snack("保存成功")
                 self._close_dialog(dlg)
                 self.page.run_task(self._reload)

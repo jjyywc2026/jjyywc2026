@@ -91,25 +91,25 @@ class RewardService:
                     qtag = f'[{iquality}]' if iquality else ''
                     ui = self.db.fetch_one("SELECT quantity FROM user_items WHERE user_id=? AND item_id=?", [user_id, item_id])
                     cur_qty = int(ui['quantity'] or 0) if ui else 0
-                    detail = f"【奖励发放】{qtag}{iname}\n获得：×{item_quantity}\n当前持有：{cur_qty}\n原因：{reason}\n操作人：{operator}"
+                    detail = f"{qtag}{iname} ×{item_quantity}\n当前持有：{cur_qty}\n来源：{reason}\n发放人：{operator}"
                     self.db.add_user_message(user_id, '奖励发放', detail, 'reward')
                 elif reward_type == 'score':
                     u = self.db.fetch_one("SELECT score FROM users WHERE user_id=?", [user_id])
                     cur = int(u['score'] or 0) if u else 0
-                    detail = f"【奖励发放】积分\n获得：+{value}\n变化：{cur - int(value)} → {cur}\n原因：{reason}\n操作人：{operator}"
+                    detail = f"积分 +{value}\n余额：{cur - int(value)} → {cur}\n来源：{reason}\n发放人：{operator}"
                     self.db.add_user_message(user_id, '奖励发放', detail, 'reward')
                 elif reward_type == 'experience':
                     u = self.db.fetch_one("SELECT experience FROM users WHERE user_id=?", [user_id])
                     cur = int(u['experience'] or 0) if u else 0
-                    detail = f"【奖励发放】经验\n获得：+{value}\n变化：{cur - int(value)} → {cur}\n原因：{reason}\n操作人：{operator}"
+                    detail = f"经验 +{value}\n当前经验：{cur}\n来源：{reason}\n发放人：{operator}"
                     self.db.add_user_message(user_id, '奖励发放', detail, 'reward')
                 elif reward_type == 'star':
                     u = self.db.fetch_one("SELECT total_stars FROM users WHERE user_id=?", [user_id])
                     cur = int(u['total_stars'] or 0) if u else 0
-                    detail = f"【奖励发放】星星\n获得：+{value}\n变化：{cur - int(value)} → {cur}\n原因：{reason}\n操作人：{operator}"
+                    detail = f"星星 +{value}\n当前：{cur}\n来源：{reason}\n发放人：{operator}"
                     self.db.add_user_message(user_id, '奖励发放', detail, 'reward')
                 else:
-                    detail = f"【奖励发放】{tname} +{value}\n原因：{reason}\n操作人：{operator}"
+                    detail = f"{tname} +{value}\n来源：{reason}\n发放人：{operator}"
                     self.db.add_user_message(user_id, '奖励发放', detail, 'reward')
             return ok, msg
         except Exception as e:
@@ -158,7 +158,7 @@ class RewardService:
                     cur += 1
                     self.db.execute("UPDATE users SET level_id=? WHERE user_id=?", [cur, user_id])
                     self.db.add_user_message(user_id, '等级提升',
-                        f'【等级提升】恭喜升级到 Lv.{cur}\n当前经验：{new_exp}\n继续努力解锁更多功能！', 'levelup')
+                        f'恭喜升级到 Lv.{cur}！\n当前经验：{new_exp}\n继续努力解锁更多功能', 'achievement')
                 else:
                     break
         except Exception:
@@ -250,8 +250,8 @@ class RewardService:
             gift_item = self.db.fetch_one("SELECT name, quality FROM items WHERE id=?", [gift_item_id])
             gquality = gift_item.get('quality','') if gift_item else ''
             qtag = f'[{gquality}]' if gquality else ''
-            detail = f"【礼包发放】{qtag}{name} ×{quantity}\n原因：{reason}\n操作人：{operator}\n提示：请到背包中开启礼包获取掉落物品"
-            self.db.add_user_message(user_id, '礼包发放', detail, 'gift')
+            detail = f"{qtag}{name} ×{quantity}\n来源：{reason}\n发放人：{operator}\n请到背包中开启礼包获取奖励"
+            self.db.add_user_message(user_id, '获得礼包', detail, 'gift')
             return True, f"成功发放 {name}×{quantity}"
         except Exception as e:
             return False, f"礼包发放失败: {e}"
@@ -280,7 +280,7 @@ class RewardService:
         qtag4 = f'[{q4}]' if q4 else ''
         admin_name = getattr(self, 'page', None) and getattr(self.page, '_user_data', {}).get('username', '管理员') or '管理员'
         self.db.add_user_message(user_id, '背包变更',
-            f'【背包变更】{qtag4}{iname}\n数量：{old} → {new_quantity}\n操作人：{admin_name}', 'backpack')
+            f'{qtag4}{iname}\n数量：{old} → {new_quantity}\n操作人：{admin_name}', 'backpack')
         return True, f"数量已更新为 {new_quantity}"
 
     def delete_backpack_item(self, user_id, item_id, operator="管理员"):
@@ -302,5 +302,5 @@ class RewardService:
         qtag5 = f'[{q5}]' if q5 else ''
         admin_name = getattr(self, 'page', None) and getattr(self.page, '_user_data', {}).get('username', '管理员') or '管理员'
         self.db.add_user_message(user_id, '物品移除',
-            f'【物品移除】{qtag5}{iname}\n原数量：{int(existing["quantity"] or 0)}\n操作人：{admin_name}', 'backpack')
+            f'{qtag5}{iname}\n原数量：{int(existing["quantity"] or 0)}\n操作人：{admin_name}', 'backpack')
         return True, "已从背包移除"

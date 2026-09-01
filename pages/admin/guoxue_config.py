@@ -15,6 +15,7 @@ class GuoxueConfigTab(AdminBaseTab):
         super().__init__(page)
         self._list_view = None
         self._cat_opts = []
+        self._user_opts = ['0:全部用户'] + [f"{u['user_id']}:{u['username']}" for u in (users or [])]
 
     def build(self):
         self._list_view = ft.ListView(spacing=2, expand=True)
@@ -41,15 +42,18 @@ class GuoxueConfigTab(AdminBaseTab):
                     "LEFT JOIN users u ON tc.user_id=u.user_id ORDER BY tc.user_id, tc.id")
                 cats = self.db.fetch_all(
                     "SELECT DISTINCT category FROM questions WHERE category IS NOT NULL ORDER BY category")
-                return configs, cats, None
+                users = self.db.fetch_all(
+                    "SELECT user_id, username FROM users ORDER BY user_id")
+                return configs, cats, users, None
             except Exception as e:
-                return None, [], str(e)
+                return None, [], [], str(e)
 
-        configs, cats, err = await asyncio.to_thread(_query)
+        configs, cats, users, err = await asyncio.to_thread(_query)
         if err:
             self.snack(f"加载失败: {err}")
             return
         self._cat_opts = [c['category'] for c in (cats or []) if c.get('category')]
+        self._user_opts = ['0:全部用户'] + [f"{u['user_id']}:{u['username']}" for u in (users or [])]
 
         # 按用户分组
         groups = {}
@@ -110,6 +114,16 @@ class GuoxueConfigTab(AdminBaseTab):
         self._list_view.controls = tiles
         self.page.update()
 
+    def _fmt_user_opt(self, uid):
+        """将用户ID格式化为下拉选项字符串 ID:用户名"""
+        uid = int(uid or 0)
+        if uid == 0:
+            return "0:全部用户"
+        for u in (self._user_opts or []):
+            if u.startswith(f"{uid}:"):
+                return u
+        return f"{uid}:用户{uid}"
+
     def _add_config(self, e=None):
         self._open_config_form(None)
 
@@ -121,7 +135,7 @@ class GuoxueConfigTab(AdminBaseTab):
         cat_opts = self._cat_opts or CATEGORY_OPTIONS
 
         fields = [
-            ("用户ID(0=全部)", "user_id", cfg.get('user_id', 0) if is_edit else 0, "number"),
+            ("用户", "user_id", self._fmt_user_opt(cfg.get('user_id', 0)) if is_edit else "0:全部用户", self._user_opts),
             ("分类", "category", cfg.get('category', '') if is_edit else "", cat_opts),
             ("等级", "level", cfg.get('level', '小学') if is_edit else "小学", LEVEL_OPTIONS),
             ("题目数量", "question_count", cfg.get('question_count', 5) if is_edit else 5, "number"),
@@ -129,7 +143,8 @@ class GuoxueConfigTab(AdminBaseTab):
 
         def on_submit(data):
             try:
-                uid = int(data['user_id'] or 0)
+                uid_str = str(data['user_id'] or '0')
+                uid = int(uid_str.split(':')[0]) if ':' in uid_str else int(uid_str or 0)
                 cat = data['category'].strip()
                 level = data['level']
                 qcnt = int(data['question_count'] or 5)

@@ -625,7 +625,7 @@ class UserManagementTab(AdminBaseTab):
         self.db.execute("UPDATE users SET password=? WHERE user_id=?", [hashed, user_id])
         self._log_operation("reset_password", "user", target_id=user_id, details="重置为123456")
         admin_name = getattr(self.page, '_user_data', {}).get('username', '管理员')
-        self.db.add_user_message(user_id, '密码重置', f'【密码重置】你的密码已被{admin_name}重置\n新密码：123456\n请登录后及时修改密码以保障账户安全', 'system')
+        self.db.add_user_message(user_id, '登录密码已重置', f'{admin_name} 将你的登录密码重置为 123456\n为了账户安全，请登录后尽快修改密码', 'system')
         await self._load_users()
 
     # ---------- 修改密码 ----------
@@ -683,7 +683,7 @@ class UserManagementTab(AdminBaseTab):
         self.db.execute("UPDATE users SET out_password=? WHERE user_id=?", [hashed, user_id])
         self._log_operation("reset_out_password", "user", target_id=user_id, details="重置为123456")
         admin_name = getattr(self.page, '_user_data', {}).get('username', '管理员')
-        self.db.add_user_message(user_id, '二级密码重置', f'【二级密码重置】你的二级密码已被{admin_name}重置\n新密码：123456', 'system')
+        self.db.add_user_message(user_id, '二级密码已重置', f'{admin_name} 将你的二级密码重置为 123456\n请及时修改以保障安全', 'system')
         await self._load_users()
 
     # ---------- 修改二级密码 ----------
@@ -751,7 +751,7 @@ class UserManagementTab(AdminBaseTab):
         old_name = _status_name(old_status) if old_status is not None else '未知'
         admin_name = getattr(self.page, '_user_data', {}).get('username', '管理员')
         self.db.add_user_message(user_id, '账户状态变更',
-            f'【账户状态】{admin_name}将你的账户状态变更\n{old_name} → {_status_name(status)}', 'system')
+            f'{admin_name} 将你的账户状态从「{old_name}」变更为「{_status_name(status)}」', 'system')
         await self._load_users()
 
     # ---------- 删除用户 ----------

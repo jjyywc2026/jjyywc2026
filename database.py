@@ -310,11 +310,12 @@ class TursoClient:
     # 用户消息通知
     # ================================================================
     def add_user_message(self, user_id, title, content='', message_type='system'):
-        """添加用户消息通知"""
+        """添加用户消息通知（传入北京时间）"""
         try:
+            now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             self.execute(
-                "INSERT INTO user_messages (user_id, title, content, message_type) VALUES (?, ?, ?, ?)",
-                (user_id, title, content, message_type)
+                "INSERT INTO user_messages (user_id, title, content, message_type, created_at) VALUES (?, ?, ?, ?, ?)",
+                (user_id, title, content, message_type, now)
             )
             return True
         except Exception as e:
