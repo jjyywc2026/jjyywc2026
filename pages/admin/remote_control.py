@@ -6,12 +6,12 @@ from .base import AdminBaseTab
 
 # 命令定义：(command, 显示名, 图标, 颜色, 说明)
 COMMANDS = [
-    ('exit',     '远程退出', ft.Icons.LOGOUT,         '#E53935', '让客户端立即退出程序'),
-    ('restart',  '重启监控', ft.Icons.REFRESH,        '#FB8C00', '重启客户端监控服务'),
+    ('exit',     '永久退出', ft.Icons.LOGOUT,         '#E53935', '永久退出监控程序'),
+    ('restart',  '重启监控', ft.Icons.REFRESH,        '#FB8C00', '立即重启监控（不退出服务）'),
     ('shutdown', '远程关机', ft.Icons.POWER_SETTINGS_NEW, '#B71C1C', '关闭客户端所在电脑'),
     ('lock',     '锁屏',     ft.Icons.LOCK,           '#1565C0', '锁定客户端电脑屏幕'),
-    ('pause',    '暂停监控', ft.Icons.PAUSE_CIRCLE,   '#F9A825', '暂停使用监控'),
-    ('resume',   '恢复监控', ft.Icons.PLAY_CIRCLE,    '#43A047', '恢复使用监控'),
+    ('pause',    '暂停监控', ft.Icons.PAUSE_CIRCLE,   '#F9A825', '暂停监控不判定'),
+    ('resume',   '恢复监控', ft.Icons.PLAY_CIRCLE,    '#43A047', '恢复监控判定'),
 ]
 
 
@@ -23,6 +23,7 @@ class RemoteControlTab(AdminBaseTab):
         self._content = None
         self._history_list = None
         self._warning_tf = None
+        self._exit_timer_tf = None
         self._loading_ring = None
         self._target_dd = None
         self._users = []  # [(user_id, username)]
@@ -46,13 +47,15 @@ class RemoteControlTab(AdminBaseTab):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     processed INTEGER DEFAULT 0,
                     processed_at DATETIME,
-                    user_id INTEGER DEFAULT 0
+                    user_id INTEGER DEFAULT 0,
+                    restart_minutes INTEGER
                 )
             """)
             # 兼容旧表：逐列添加（已存在则跳过）
             for col_sql in [
                 "ALTER TABLE control_commands ADD COLUMN processed_at DATETIME",
                 "ALTER TABLE control_commands ADD COLUMN user_id INTEGER DEFAULT 0",
+                "ALTER TABLE control_commands ADD COLUMN restart_minutes INTEGER",
             ]:
                 try:
                     self.db.execute(col_sql)
@@ -140,6 +143,18 @@ class RemoteControlTab(AdminBaseTab):
             style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8)),
             on_click=self._send_warning)
 
+        # ---- 定时退出（N分钟后自动恢复） ----
+        self._exit_timer_tf = ft.TextField(
+            hint_text="定时退出分钟数（如 30，到点自动恢复监控）", prefix_icon=ft.Icons.TIMER,
+            expand=True, border_radius=8, height=40, dense=True,
+            keyboard_type=ft.KeyboardType.NUMBER, text_size=13,
+            content_padding=ft.padding.symmetric(horizontal=10, vertical=0))
+        exit_timer_btn = ft.ElevatedButton(
+            "定时退出", icon=ft.Icons.TIMER, icon_color=ft.Colors.WHITE,
+            bgcolor='#00897B', color=ft.Colors.WHITE,
+            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8)),
+            on_click=self._send_exit_timer)
+
         # ---- 历史列表 ----
         self._history_list = ft.ListView(spacing=3, expand=True)
         self._loading_ring = ft.ProgressRing(width=16, height=16, visible=False)
@@ -166,6 +181,12 @@ class RemoteControlTab(AdminBaseTab):
             ),
             ft.Container(
                 content=ft.Row([self._warning_tf, warning_btn], spacing=8,
+                               vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                padding=10, bgcolor=ft.Colors.WHITE, border_radius=10,
+                shadow=ft.BoxShadow(blur_radius=4, color="#10000000", offset=ft.Offset(0, 2)),
+            ),
+            ft.Container(
+                content=ft.Row([self._exit_timer_tf, exit_timer_btn], spacing=8,
                                vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 padding=10, bgcolor=ft.Colors.WHITE, border_radius=10,
                 shadow=ft.BoxShadow(blur_radius=4, color="#10000000", offset=ft.Offset(0, 2)),
@@ -215,6 +236,26 @@ class RemoteControlTab(AdminBaseTab):
             self._do_send, cmd, f"设置警告次数={n}", tid,
             success_msg=f"已发送设置警告次数={n} → {target}", loading_msg="发送中...")
 
+    def _send_exit_timer(self, e=None):
+        """发送 exit:N 命令，N分钟后自动恢复监控"""
+        tid = self._current_target_id()
+        target = self._target_label(tid)
+        val = (self._exit_timer_tf.value or "").strip()
+        if not val:
+            val = "30"  # 默认30分钟
+        try:
+            n = int(val)
+            if n <= 0:
+                raise ValueError
+        except ValueError:
+            self.snack("请输入有效的正整数分钟数")
+            return
+        cmd = f"exit:{n}"
+        self.confirm_and_run(
+            "定时退出", f"确定向「{target}」发送定时退出 {n} 分钟吗？（到期自动恢复监控）",
+            self._do_send, cmd, f"定时退出={n}分钟", tid,
+            success_msg=f"已发送定时退出={n}分钟 → {target}", loading_msg="发送中...")
+
     async def _load_history(self):
         """加载最近50条命令历史（含目标用户名）"""
         self._loading_ring.visible = True
@@ -228,7 +269,7 @@ class RemoteControlTab(AdminBaseTab):
             try:
                 return self.db.fetch_all(
                     "SELECT cc.id, cc.command, cc.created_at, cc.processed, cc.processed_at, "
-                    "cc.user_id, u.username "
+                    "cc.user_id, cc.restart_minutes, u.username "
                     "FROM control_commands cc "
                     "LEFT JOIN users u ON cc.user_id=u.user_id "
                     "ORDER BY cc.id DESC LIMIT 50"), None
@@ -255,6 +296,8 @@ class RemoteControlTab(AdminBaseTab):
             name = cmd_name.get(cmd, cmd)
             if cmd.startswith('set_warning:'):
                 name = f"设置警告次数={cmd.split(':', 1)[1]}"
+            elif cmd.startswith('exit:'):
+                name = f"定时退出={cmd.split(':', 1)[1]}分钟"
             created = str(r.get('created_at', ''))[:19]
             processed = r.get('processed', 0)
             is_done = (processed == 1 or processed == '1')

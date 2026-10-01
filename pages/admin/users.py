@@ -51,7 +51,17 @@ class UserManagementTab(AdminBaseTab):
         ], spacing=4, expand=True)
 
     async def load_data(self):
+        await self._ensure_columns()
         await self._load_users()
+
+    async def _ensure_columns(self):
+        """确保 users 表有 unlock_minutes 列"""
+        def _do():
+            try:
+                self.db.execute("ALTER TABLE users ADD COLUMN unlock_minutes INTEGER DEFAULT 0")
+            except Exception:
+                pass
+        await asyncio.to_thread(_do)
 
     def _do_search(self, keyword):
         self._search_loading_show(True)
@@ -557,24 +567,28 @@ class UserManagementTab(AdminBaseTab):
             ("总使用时长(分钟)", "total_time", user.get('total_time', 0), "number"),
             ("学习时长", "studay_time", user.get('studay_time', ''), "text"),
             ("评分开关", "evaluation_score", user.get('evaluation_score', 0), "number"),
+            ("解锁分钟数", "unlock_minutes", user.get('unlock_minutes', 0), "number"),
         ]
 
         def on_submit(data):
             try:
                 self.db.execute(
                     """UPDATE users SET username=?, user_type=?, total_time=?, studay_time=?,
-                       evaluation_score=?
+                       evaluation_score=?, unlock_minutes=?
                        WHERE user_id=?""",
                     [data['username'], data['user_type'],
                      int(data['total_time'] or 0), data['studay_time'] or '',
                      int(data['evaluation_score'] or 0),
+                     int(data.get('unlock_minutes', 0) or 0),
                      user['user_id']])
                 before = {'username': user.get('username'), 'user_type': user.get('user_type'),
                           'total_time': user.get('total_time', 0), 'studay_time': user.get('studay_time', ''),
-                          'evaluation_score': user.get('evaluation_score', 0)}
+                          'evaluation_score': user.get('evaluation_score', 0),
+                          'unlock_minutes': user.get('unlock_minutes', 0)}
                 after = {'username': data['username'], 'user_type': data['user_type'],
                          'total_time': int(data['total_time'] or 0), 'studay_time': data['studay_time'] or '',
-                         'evaluation_score': int(data['evaluation_score'] or 0)}
+                         'evaluation_score': int(data['evaluation_score'] or 0),
+                         'unlock_minutes': int(data.get('unlock_minutes', 0) or 0)}
                 self._log_operation("edit_user", "user", target_id=user['user_id'],
                                     target_name=data['username'],
                                     details=f"类型:{data['user_type']},时长:{data['total_time']}",
