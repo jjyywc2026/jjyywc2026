@@ -1162,6 +1162,8 @@ class GuoxuePage:
         self._cached_qs = None
         self._weak_show_count = 20
         self._loaded = False
+        self._body.content = self._loading()
+        self.page.update()
         self.page.run_task(self.load_data)
 
     # ---------- 渲染 ----------

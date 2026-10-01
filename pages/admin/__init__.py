@@ -20,6 +20,7 @@ from pages.admin.card_settings import CardSettingsTab
 from pages.admin.cihai_config import CihaiConfigTab
 from pages.admin.cihai_material import CihaiMaterialTab
 from pages.admin.message_admin import MessageAdminTab
+from pages.admin.remote_control import RemoteControlTab
 
 
 class AdminPage:
@@ -50,6 +51,7 @@ class AdminPage:
             ("奖励历史", ft.Icons.HISTORY, RewardHistoryTab),
             ("操作历史", ft.Icons.ACCESS_TIME, OperationHistoryTab),
             ("背包管理", ft.Icons.SHOPPING_BAG, BackpackTab),
+            ("远程控制", ft.Icons.CAST, RemoteControlTab),
             ("管理日志", ft.Icons.ADMIN_PANEL_SETTINGS, AdminLogsTab),
         ]
         self._tab_instances = {}   # {index: tab_instance}
@@ -143,5 +145,5 @@ __all__ = [
     'ExchangeManagementTab', 'WordsSettingsTab', 'TimeLimitsTab', 'GuoxueManagementTab',
     'RewardRulesTab', 'RewardDistributionTab', 'GiftConfigTab',
     'ItemManagementTab', 'RewardHistoryTab', 'OperationHistoryTab',
-     'BackpackTab','AdminLogsTab','CihaiConfigTab',
+     'BackpackTab','AdminLogsTab','CihaiConfigTab','RemoteControlTab',
 ]

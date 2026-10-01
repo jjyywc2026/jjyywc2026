@@ -105,7 +105,7 @@ class RewardHistoryTab(AdminBaseTab):
                         ORDER BY operation_time DESC LIMIT {per_limit}
                     ) g
                 """
-                params = [user_id, user_id, user_id, limit] if user_id else [limit]
+                params = [user_id, user_id, user_id, limit + 1] if user_id else [limit + 1]
                 return self.db.fetch_all(
                     f"""SELECT combined.*, u.username, i.name as item_name, i.quality as item_quality
                         FROM ({union_sql}) combined
@@ -121,8 +121,10 @@ class RewardHistoryTab(AdminBaseTab):
             self.snack(f"加载失败: {err}")
             self._search_loading_show(False)
             return
-        self._loaded = len(rows or [])
-        self._has_more = self._loaded >= INITIAL_LIMIT
+        rows = rows or []
+        self._has_more = len(rows) > INITIAL_LIMIT
+        rows = rows[:INITIAL_LIMIT]
+        self._loaded = len(rows)
         self._render_rows(rows, replace=True)
         self._search_loading_show(False)
 
@@ -166,7 +168,7 @@ class RewardHistoryTab(AdminBaseTab):
                         ORDER BY operation_time DESC LIMIT {per_limit}
                     ) g
                 """
-                params = [user_id, user_id, user_id, PAGE_SIZE, offset] if user_id else [PAGE_SIZE, offset]
+                params = [user_id, user_id, user_id, PAGE_SIZE + 1, offset] if user_id else [PAGE_SIZE + 1, offset]
                 return self.db.fetch_all(
                     f"""SELECT combined.*, u.username, i.name as item_name, i.quality as item_quality
                         FROM ({union_sql}) combined
@@ -181,12 +183,13 @@ class RewardHistoryTab(AdminBaseTab):
         if err:
             self.snack(f"加载失败: {err}")
             return
-        if not rows:
-            self._has_more = False
+        rows = rows or []
+        if len(rows) > PAGE_SIZE:
+            rows = rows[:PAGE_SIZE]
+            self._has_more = True
         else:
-            self._loaded += len(rows)
-            if len(rows) < PAGE_SIZE:
-                self._has_more = False
+            self._has_more = False
+        self._loaded += len(rows)
         self._render_rows(rows, replace=False)
 
     def _render_rows(self, rows, replace=False):
@@ -257,7 +260,7 @@ class RewardHistoryTab(AdminBaseTab):
                         q_chip,
                     ], spacing=5, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                     # 第二行：奖励名称（大字）
-                    ft.Text(reward_name, size=14, weight=ft.FontWeight.W_700, color='#1A237E', no_wrap=True),
+                    ft.Text(reward_name, size=14, weight=ft.FontWeight.W_700, color='#1A237E'),
                     # 第三行：奖励内容
                     content_row,
                     # 第四行：时间

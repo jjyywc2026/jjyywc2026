@@ -115,7 +115,7 @@ class OperationHistoryTab(AdminBaseTab):
 
         def _query():
             try:
-                sql, params = self._build_sql(user_id, op_type, INITIAL_LIMIT)
+                sql, params = self._build_sql(user_id, op_type, INITIAL_LIMIT + 1)
                 return self.db.fetch_all(sql, params), None
             except Exception as e:
                 return None, str(e)
@@ -125,8 +125,10 @@ class OperationHistoryTab(AdminBaseTab):
             self.snack(f"加载失败: {err}")
             self._search_ring.visible = False
             return
-        self._loaded = len(rows or [])
-        self._has_more = self._loaded >= INITIAL_LIMIT
+        rows = rows or []
+        self._has_more = len(rows) > INITIAL_LIMIT
+        rows = rows[:INITIAL_LIMIT]
+        self._loaded = len(rows)
         self._render_rows(rows, replace=True)
         self._search_ring.visible = False
         try:
@@ -146,7 +148,7 @@ class OperationHistoryTab(AdminBaseTab):
 
         def _query():
             try:
-                sql, params = self._build_sql(user_id, op_type, PAGE_SIZE, offset)
+                sql, params = self._build_sql(user_id, op_type, PAGE_SIZE + 1, offset)
                 return self.db.fetch_all(sql, params), None
             except Exception as e:
                 return None, str(e)
@@ -155,12 +157,13 @@ class OperationHistoryTab(AdminBaseTab):
         if err:
             self.snack(f"加载失败: {err}")
             return
-        if not rows:
-            self._has_more = False
+        rows = rows or []
+        if len(rows) > PAGE_SIZE:
+            rows = rows[:PAGE_SIZE]
+            self._has_more = True
         else:
-            self._loaded += len(rows)
-            if len(rows) < PAGE_SIZE:
-                self._has_more = False
+            self._has_more = False
+        self._loaded += len(rows)
         self._render_rows(rows, replace=False)
 
     def _parse_details(self, details):
@@ -199,7 +202,6 @@ class OperationHistoryTab(AdminBaseTab):
 
     def _render_rows(self, rows, replace=False):
         # ---- 预处理：把 open_gift_extra 合并到对应的 open_gift ----
-        # 按 (user_id, item_id, 日期) 收集额外掉落
         extra_map = {}
         for r in rows or []:
             if r.get('operation_type') == 'open_gift_extra':
@@ -209,46 +211,43 @@ class OperationHistoryTab(AdminBaseTab):
         tiles = []
         for r in rows or []:
             op_type = r.get('operation_type', '')
-            # 跳过独立的额外掉落记录（已合并到开启礼包）
             if op_type == 'open_gift_extra':
                 continue
 
-            meta = TYPE_META.get(op_type, {'name': op_type, 'color': '#757575', 'icon': ft.Icons.FIBER_MANUAL_RECORD})
+            meta = TYPE_META.get(op_type, {'name': op_type or '未知', 'color': '#757575', 'icon': ft.Icons.FIBER_MANUAL_RECORD})
             tname = meta['name']
             tcolor = meta['color']
-            ticon = meta['icon']
 
             det = self._parse_details(r.get('details', ''))
             username = r.get('username', '?')
-            op_id = r.get('operation_id', '')
             time_str = str(r.get('operation_time', ''))[:19]
 
-            # 源物品
+            # 源物品（操作对象）
             src_name = r.get('item_name') or det.get('source_item_name') or f"物品{r.get('item_id','')}"
             src_q = r.get('item_quality') or det.get('source_quality') or det.get('source_item_quality')
             src_qty = r.get('quantity', '')
-            src_cat = r.get('item_category') or det.get('source_item_category')
+            src_color = self.QUALITY_COLORS.get(src_q, '#9E9E9E') if src_q else '#424242'
 
             # 目标物品
             tgt_name = r.get('target_item_name') or det.get('target_item_name')
             tgt_q = r.get('target_quality') or det.get('target_quality')
             tgt_qty = r.get('target_quantity') or det.get('target_quantity')
 
-            # 构建描述行
-            desc_rows = []
+            # ---- 第二行：操作描述（大字）----
+            action_verb = {'use': '使用', 'use_coupon': '使用', 'exchange': '兑换',
+                           'open_gift': '开启', 'synthesize': '合成',
+                           'admin_delete': '删除', 'admin_edit': '修改'}.get(op_type, tname)
+            qty_str = f" ×{src_qty}" if src_qty and src_qty != 1 else ""
+            title_text = f"{action_verb} {src_name}{qty_str}"
 
-            # 第一行：源物品
-            src_chip = self._item_chip(src_name, src_q, src_qty)
-            if src_chip:
-                desc_rows.append(src_chip)
+            # ---- 第三行：消耗/获得内容 ----
+            content_parts = []
 
-            # 开启礼包：主掉落 + 额外掉落合并显示
+            # 开启礼包：主掉落 + 额外掉落
             if op_type == 'open_gift':
-                # 主掉落
                 drops = []
                 if tgt_name:
                     drops.append((tgt_name, tgt_q, tgt_qty, False))
-                # 查找合并的额外掉落
                 key = (r.get('user_id'), r.get('item_id'), str(r.get('operation_time', ''))[:10])
                 extras = extra_map.get(key, [])
                 for ex in extras:
@@ -258,77 +257,52 @@ class OperationHistoryTab(AdminBaseTab):
                     ex_qty = ex.get('target_quantity') or ex_det.get('target_quantity')
                     if ex_name:
                         drops.append((ex_name, ex_q, ex_qty, True))
-
                 if drops:
-                    arrow = ft.Row([ft.Icon(ft.Icons.ARROW_FORWARD, size=12, color=ft.Colors.GREY_400)],
-                                   alignment=ft.MainAxisAlignment.CENTER)
-                    desc_rows.append(arrow)
+                    drop_strs = []
                     for dname, dq, dqty, is_extra in drops:
-                        prefix = "额外 " if is_extra else "获得 "
-                        chip = self._item_chip(dname, dq, dqty, prefix=prefix)
-                        if chip:
-                            desc_rows.append(chip)
+                        dqty_s = f"×{dqty}" if dqty and dqty != 1 else ""
+                        prefix = "额外" if is_extra else ""
+                        drop_strs.append(f"{prefix}{dname}{dqty_s}")
+                    content_parts.append(ft.Text("获得: " + "、".join(drop_strs), size=11, color='#2E7D32', weight=ft.FontWeight.W_600))
                     if extras:
-                        desc_rows.append(ft.Text(
-                            f"共{len(drops)}个掉落（含{len(extras)}个额外）", size=9, color='#AB47BC', weight=ft.FontWeight.W_600))
+                        content_parts.append(ft.Text(f"（共{len(drops)}个掉落，含{len(extras)}个额外）", size=9, color='#AB47BC'))
             elif tgt_name:
-                arrow = ft.Row([ft.Icon(ft.Icons.ARROW_FORWARD, size=12, color=ft.Colors.GREY_400)],
-                               alignment=ft.MainAxisAlignment.CENTER)
-                tgt_chip = self._item_chip(tgt_name, tgt_q, tgt_qty, prefix="获得 ")
-                desc_rows.append(arrow)
-                desc_rows.append(tgt_chip)
+                tqty_s = f"×{tgt_qty}" if tgt_qty and tgt_qty != 1 else ""
+                content_parts.append(ft.Text(f"获得: {tgt_name}{tqty_s}", size=11, color='#2E7D32', weight=ft.FontWeight.W_600))
 
-            # 额外信息行
-            extra_parts = []
+            # 消耗信息
+            if det.get('coin_count'):
+                content_parts.append(ft.Text(f"消耗{det['coin_count']}金币", size=10, color='#F57C00'))
             if det.get('reward_type'):
                 rt = det['reward_type']
                 rv = det.get('reward_value', 0)
                 reward_label = {'score': '积分', 'exp': '经验', 'lottery': '抽奖', 'star': '星星', 'time': '分钟'}.get(rt, rt)
-                extra_parts.append(ft.Text(f"+{rv}{reward_label}", size=10, color='#2E7D32', weight=ft.FontWeight.W_600))
+                content_parts.append(ft.Text(f"+{rv}{reward_label}", size=10, color='#2E7D32', weight=ft.FontWeight.W_600))
             if det.get('updated_points') is not None:
-                extra_parts.append(ft.Text(f"余额:{det['updated_points']}", size=9, color=ft.Colors.GREY_500))
+                content_parts.append(ft.Text(f"余额:{det['updated_points']}", size=9, color=ft.Colors.GREY_500))
             if det.get('updated_stars') is not None:
-                extra_parts.append(ft.Text(f"星星:{det['updated_stars']}", size=9, color=ft.Colors.GREY_500))
-            if det.get('coin_count'):
-                extra_parts.append(ft.Text(f"消耗{det['coin_count']}金币", size=10, color='#F57C00'))
+                content_parts.append(ft.Text(f"星星:{det['updated_stars']}", size=9, color=ft.Colors.GREY_500))
             if det.get('chest_quality'):
-                extra_parts.append(ft.Text(f"宝箱:{det['chest_quality']}", size=10,
-                                           color=self._quality_color(det['chest_quality']), weight=ft.FontWeight.W_600))
-            if det.get('source_quality') and det.get('target_quality'):
-                extra_parts.append(ft.Text(
-                    f"{det['source_quality']}→{det['target_quality']}", size=10,
-                    color=self._quality_color(det['target_quality']), weight=ft.FontWeight.W_600))
-            if op_type == 'admin_grant':
-                extra_parts.append(ft.Text(det.get('_raw', '管理员发放'), size=10, color='#1976D2'))
-            if op_type == 'admin_delete':
-                extra_parts.append(ft.Text(det.get('_raw', '管理员删除'), size=10, color='#E53935'))
-            if op_type == 'admin_edit':
-                extra_parts.append(ft.Text(det.get('_raw', r.get('details', '')), size=10, color=ft.Colors.GREY_600))
+                content_parts.append(ft.Text(f"宝箱:{det['chest_quality']}", size=10,
+                    color=self.QUALITY_COLORS.get(det['chest_quality'], '#9E9E9E'), weight=ft.FontWeight.W_600))
+            if det.get('source_quality') and det.get('target_quality') and op_type == 'synthesize':
+                content_parts.append(ft.Text(f"{det['source_quality']}→{det['target_quality']}", size=10,
+                    color=self.QUALITY_COLORS.get(det['target_quality'], '#9E9E9E'), weight=ft.FontWeight.W_600))
 
-            if extra_parts:
-                desc_rows.append(ft.Row(extra_parts, spacing=6, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER))
+            # 管理员操作备注
+            if op_type in ('admin_delete', 'admin_edit'):
+                raw = det.get('_raw', r.get('details', ''))
+                if raw:
+                    content_parts.append(ft.Text(str(raw)[:60], size=10, color='#E53935' if op_type == 'admin_delete' else ft.Colors.GREY_600))
 
-            if not tgt_name and not extra_parts and det.get('_raw') and op_type != 'open_gift':
-                desc_rows.append(ft.Text(det['_raw'], size=10, color=ft.Colors.GREY_500))
+            # 如果没有内容行，显示原始备注
+            if not content_parts and det.get('_raw') and op_type != 'open_gift':
+                content_parts.append(ft.Text(det['_raw'], size=10, color=ft.Colors.GREY_500))
 
-            # 头部
-            header = ft.Row([
-                ft.Container(content=ft.Icon(ticon, size=12, color=ft.Colors.WHITE),
-                    bgcolor=tcolor, border_radius=4, width=20, height=20, alignment=ft.alignment.center),
-                ft.Text(username, size=11, color=ft.Colors.GREY_700, weight=ft.FontWeight.W_600),
-                ft.Container(content=ft.Text(tname, size=9, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
-                    bgcolor=tcolor, border_radius=3, padding=ft.padding.symmetric(horizontal=5, vertical=1)),
-                ft.Container(expand=True),
-                ft.Text(f"#{op_id}", size=9, color=ft.Colors.GREY_400),
-            ], spacing=5, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+            content_row = ft.Row(content_parts, spacing=6, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER) if content_parts else ft.Container()
 
-            # 底部
-            footer = ft.Row([
-                ft.Icon(ft.Icons.SCHEDULE, size=10, color=ft.Colors.GREY_400),
-                ft.Text(time_str, size=10, color=ft.Colors.GREY_400),
-                ft.Container(expand=True),
-                ft.Text(f"UID:{r.get('user_id','')}", size=9, color=ft.Colors.GREY_300),
-            ], spacing=3, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+            # 品质标签
+            q_chip = self._quality_chip(src_q) if src_q else ft.Container()
 
             # 合并后的完整数据（用于详情弹窗）
             full_detail = dict(det)
@@ -348,12 +322,26 @@ class OperationHistoryTab(AdminBaseTab):
                         })
                     full_detail['_extra_drops'] = extra_list
 
+            # ---- 四行卡片（桌面版风格）----
             card = ft.Container(
-                content=ft.Column([header] + desc_rows + [footer], spacing=3, tight=True),
-                padding=ft.padding.symmetric(horizontal=10, vertical=7),
+                content=ft.Column([
+                    # 第一行：用户名 + 操作类型 + 品质
+                    ft.Row([
+                        ft.Text(username, size=11, color=ft.Colors.GREY_600),
+                        ft.Container(content=ft.Text(tname, size=9, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
+                            bgcolor=tcolor, border_radius=3, padding=ft.padding.symmetric(horizontal=5, vertical=1)),
+                        q_chip,
+                    ], spacing=5, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    # 第二行：操作描述（大字）
+                    ft.Text(title_text, size=14, weight=ft.FontWeight.W_700, color=src_color),
+                    # 第三行：消耗/获得内容
+                    content_row,
+                    # 第四行：时间
+                    ft.Text(time_str, size=10, color=ft.Colors.GREY_400),
+                ], spacing=3, tight=True),
+                padding=ft.padding.symmetric(horizontal=12, vertical=8),
                 bgcolor=ft.Colors.WHITE, border_radius=8,
-                margin=ft.margin.only(bottom=3),
-                border=ft.border.all(0.5, ft.Colors.with_opacity(0.1, tcolor)),
+                margin=ft.margin.only(bottom=4),
                 shadow=ft.BoxShadow(blur_radius=2, color="#08000000", offset=ft.Offset(0, 1)),
                 on_click=lambda e, d=full_detail, row=r: self._show_detail(d, row),
                 ink=True,

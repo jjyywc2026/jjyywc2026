@@ -15,7 +15,7 @@ class GuoxueConfigTab(AdminBaseTab):
         super().__init__(page)
         self._list_view = None
         self._cat_opts = []
-        self._user_opts = ['0:全部用户'] + [f"{u['user_id']}:{u['username']}" for u in (users or [])]
+        self._user_opts = ['0:全部用户']
 
     def build(self):
         self._list_view = ft.ListView(spacing=2, expand=True)
@@ -53,7 +53,7 @@ class GuoxueConfigTab(AdminBaseTab):
             self.snack(f"加载失败: {err}")
             return
         self._cat_opts = [c['category'] for c in (cats or []) if c.get('category')]
-        self._user_opts = ['0:全部用户'] + [f"{u['user_id']}:{u['username']}" for u in (users or [])]
+        self._user_opts = ['0:全部用户']
 
         # 按用户分组
         groups = {}
