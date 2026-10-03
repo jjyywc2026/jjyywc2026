@@ -27,6 +27,7 @@ class RemoteControlTab(AdminBaseTab):
         self._loading_ring = None
         self._target_dd = None
         self._users = []  # [(user_id, username)]
+        self._machines = []  # [(machine_id, hostname, status)]
 
     def build(self):
         self._content = ft.Column(spacing=10, expand=True, scroll=ft.ScrollMode.ADAPTIVE)
@@ -35,6 +36,7 @@ class RemoteControlTab(AdminBaseTab):
     async def load_data(self):
         await self._ensure_table()
         await self._load_users()
+        await self._load_machines()
         await self._render()
 
     async def _ensure_table(self):
@@ -48,6 +50,7 @@ class RemoteControlTab(AdminBaseTab):
                     processed INTEGER DEFAULT 0,
                     processed_at DATETIME,
                     user_id INTEGER DEFAULT 0,
+                    machine_id TEXT DEFAULT '',
                     restart_minutes INTEGER
                 )
             """)
@@ -56,6 +59,7 @@ class RemoteControlTab(AdminBaseTab):
                 "ALTER TABLE control_commands ADD COLUMN processed_at DATETIME",
                 "ALTER TABLE control_commands ADD COLUMN user_id INTEGER DEFAULT 0",
                 "ALTER TABLE control_commands ADD COLUMN restart_minutes INTEGER",
+                "ALTER TABLE control_commands ADD COLUMN machine_id TEXT DEFAULT ''",
             ]:
                 try:
                     self.db.execute(col_sql)
@@ -75,6 +79,21 @@ class RemoteControlTab(AdminBaseTab):
             self._users = []
             return
         self._users = [(r['user_id'], r.get('username') or f"用户{r['user_id']}") for r in (rows or [])]
+
+    async def _load_machines(self):
+        """加载在线机器列表（从 machine_status 表）"""
+        def _query():
+            try:
+                return self.db.fetch_all(
+                    "SELECT machine_id, hostname, status, current_user_id, current_username "
+                    "FROM machine_status ORDER BY last_heartbeat DESC"), None
+            except Exception as e:
+                return None, str(e)
+        rows, err = await asyncio.to_thread(_query)
+        if err:
+            self._machines = []
+            return
+        self._machines = [(r.get('machine_id',''), r.get('hostname','?'), r.get('status','unknown')) for r in (rows or [])]
 
     def _target_options(self):
         opts = [ft.dropdown.Option(key="0", text="广播（所有电脑）")]
@@ -103,7 +122,16 @@ class RemoteControlTab(AdminBaseTab):
         # ---- 目标用户选择 ----
         self._target_dd = ft.Dropdown(
             options=self._target_options(), value="0",
-            label="目标", border_radius=8, text_size=12, dense=True,
+            label="目标用户", border_radius=8, text_size=12, dense=True,
+            content_padding=ft.padding.symmetric(horizontal=8, vertical=0),
+            expand=True)
+        # ---- 目标机器选择（可选，指定机器则只发给该机器） ----
+        machine_opts = [ft.dropdown.Option(key="", text="不指定（按用户）")]
+        for mid, hname, status in self._machines:
+            machine_opts.append(ft.dropdown.Option(key=mid, text=f"{hname} ({status})"))
+        self._machine_dd = ft.Dropdown(
+            options=machine_opts, value="",
+            label="目标机器（可选）", border_radius=8, text_size=12, dense=True,
             content_padding=ft.padding.symmetric(horizontal=8, vertical=0),
             expand=True)
 
@@ -169,7 +197,7 @@ class RemoteControlTab(AdminBaseTab):
         self._content.controls = [
             ft.Text("远程控制", size=16, weight=ft.FontWeight.BOLD, color='#263238'),
             ft.Container(
-                content=self._target_dd,
+                content=ft.Row([self._target_dd, self._machine_dd], spacing=8),
                 padding=ft.padding.symmetric(horizontal=10, vertical=6),
                 bgcolor=ft.Colors.WHITE, border_radius=10,
                 shadow=ft.BoxShadow(blur_radius=4, color="#10000000", offset=ft.Offset(0, 2)),
@@ -208,9 +236,10 @@ class RemoteControlTab(AdminBaseTab):
 
     async def _do_send(self, cmd, name, target_id):
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        machine_id = self._machine_dd.value if self._machine_dd else ""
         self.db.execute(
-            "INSERT INTO control_commands (command, created_at, processed, user_id) VALUES (?, ?, 0, ?)",
-            (cmd, now, target_id))
+            "INSERT INTO control_commands (command, created_at, processed, user_id, machine_id) VALUES (?, ?, 0, ?, ?)",
+            (cmd, now, target_id, machine_id or ""))
         self._log_operation("remote_control", "control_commands",
                             details=f"发送命令:{cmd}({name}) 目标:{target_id}")
         await self._load_history()
@@ -267,11 +296,18 @@ class RemoteControlTab(AdminBaseTab):
 
         def _query():
             try:
+                # 自动标记：超过5分钟未执行的命令设为过期(processed=3)，与桌面端一致
+                self.db.execute(
+                    "UPDATE control_commands SET processed=3, processed_at=datetime('now') "
+                    "WHERE processed=0 AND (julianday('now') - julianday(created_at)) * 1440 > 5"
+                )
                 return self.db.fetch_all(
                     "SELECT cc.id, cc.command, cc.created_at, cc.processed, cc.processed_at, "
-                    "cc.user_id, cc.restart_minutes, u.username "
+                    "cc.user_id, cc.machine_id, cc.restart_minutes, u.username, "
+                    "ms.hostname as machine_hostname "
                     "FROM control_commands cc "
                     "LEFT JOIN users u ON cc.user_id=u.user_id "
+                    "LEFT JOIN machine_status ms ON cc.machine_id=ms.machine_id "
                     "ORDER BY cc.id DESC LIMIT 50"), None
             except Exception as e:
                 return None, str(e)
@@ -301,10 +337,23 @@ class RemoteControlTab(AdminBaseTab):
             created = str(r.get('created_at', ''))[:19]
             processed = r.get('processed', 0)
             is_done = (processed == 1 or processed == '1')
-            status_color = '#43A047' if is_done else '#F57C00'
-            status_text = '已执行' if is_done else '等待执行'
+            is_expired = (processed == 3 or processed == '3')
+            if is_done:
+                status_color = '#43A047'
+                status_text = '已执行'
+            elif is_expired:
+                status_color = '#9E9E9E'
+                status_text = '已过期'
+            else:
+                status_color = '#F57C00'
+                status_text = '等待执行'
             processed_at = r.get('processed_at')
-            processed_str = f" · 执行于 {str(processed_at)[:19]}" if processed_at else ""
+            if processed_at and is_done:
+                processed_str = f" · 执行于 {str(processed_at)[:19]}"
+            elif processed_at and is_expired:
+                processed_str = f" · 过期于 {str(processed_at)[:19]}"
+            else:
+                processed_str = ""
 
             # 目标用户
             uid = r.get('user_id', 0) or 0
@@ -315,6 +364,9 @@ class RemoteControlTab(AdminBaseTab):
                 uname = r.get('username') or f"用户{uid}"
                 target_text = f"{uid}:{uname}"
                 target_color = '#1565C0'
+            # 目标机器（如果指定了）
+            machine_id = r.get('machine_id', '') or ''
+            machine_hostname = r.get('machine_hostname', '') or ''
 
             tile = ft.Container(
                 content=ft.Column([
@@ -324,12 +376,19 @@ class RemoteControlTab(AdminBaseTab):
                             content=ft.Text(target_text, size=9, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
                             bgcolor=target_color, border_radius=3,
                             padding=ft.padding.symmetric(horizontal=5, vertical=1)),
+                    ] + ([ft.Container(
+                            content=ft.Text(machine_hostname or machine_id[:12], size=9, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
+                            bgcolor='#00838F', border_radius=3,
+                            padding=ft.padding.symmetric(horizontal=5, vertical=1))] if machine_id else []) + [
                         ft.Container(expand=True),
                         ft.Container(
                             content=ft.Text(status_text, size=9, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
                             bgcolor=status_color, border_radius=3,
                             padding=ft.padding.symmetric(horizontal=5, vertical=1)),
-                    ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ] + ([ft.IconButton(ft.Icons.DELETE, icon_size=14, icon_color='#E53935',
+                                         tooltip="删除此命令", on_click=lambda e, cid=r.get('id'): self._delete_command(cid))]
+                         if not is_done and not is_expired else []),
+                    spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                     ft.Row([
                         ft.Icon(ft.Icons.SCHEDULE, size=10, color=ft.Colors.GREY_400),
                         ft.Text(f"发送于 {created}{processed_str}", size=10, color=ft.Colors.GREY_500),
@@ -349,3 +408,18 @@ class RemoteControlTab(AdminBaseTab):
 
         self._history_list.controls = tiles
         self.page.update()
+
+    def _delete_command(self, cmd_id):
+        """删除一条未执行的远程命令"""
+        self.confirm_and_run(
+            "删除命令", f"确定删除这条远程命令（#{cmd_id}）吗？",
+            self._do_delete, cmd_id,
+            success_msg="命令已删除", loading_msg="删除中...")
+
+    async def _do_delete(self, cmd_id):
+        def _do():
+            self.db.execute("DELETE FROM control_commands WHERE id=? AND processed=0", (cmd_id,))
+        await asyncio.to_thread(_do)
+        self._log_operation("delete_remote_command", "control_commands",
+                            target_id=cmd_id, details=f"删除未执行的远程命令 #{cmd_id}")
+        await self._load_history()

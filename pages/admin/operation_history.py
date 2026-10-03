@@ -12,7 +12,7 @@ TYPE_META = {
     'use_coupon':      {'name': '使用卡券', 'color': '#00897B', 'icon': ft.Icons.CONFIRMATION_NUMBER},
     'exchange':        {'name': '兑换',     'color': '#FB8C00', 'icon': ft.Icons.SWAP_HORIZ},
     'open_gift':       {'name': '开启礼包', 'color': '#EC407A', 'icon': ft.Icons.CARD_GIFTCARD},
-    'open_gift_extra': {'name': '额外掉落', 'color': '#AB47BC', 'icon': ft.Icons.AUTO_AWESOME},
+    'open_gift_extra': {'name': '掉落明细', 'color': '#AB47BC', 'icon': ft.Icons.CARD_GIFTCARD},
     'synthesize':      {'name': '合成',     'color': '#8E24AA', 'icon': ft.Icons.BUILD},
     'admin_delete':    {'name': '管理员删除','color': '#E53935', 'icon': ft.Icons.DELETE},
     'admin_edit':      {'name': '管理员修改','color': '#1565C0', 'icon': ft.Icons.EDIT},
@@ -42,7 +42,7 @@ class OperationHistoryTab(AdminBaseTab):
                                       text_size=12,
                                       content_padding=ft.padding.symmetric(horizontal=10, vertical=0),
                                       keyboard_type=ft.KeyboardType.NUMBER)
-        type_opts = [ft.dropdown.Option("全部")] + [ft.dropdown.Option(t) for t in ALL_TYPES]
+        type_opts = [ft.dropdown.Option("全部", "全部")] + [ft.dropdown.Option(t, TYPE_META[t]['name']) for t in ALL_TYPES]
         self._type_dd = ft.Dropdown(
             hint_text="操作类型", width=130, border_radius=8, value="全部",
             text_size=11, content_padding=ft.padding.symmetric(horizontal=8, vertical=0),
@@ -82,7 +82,8 @@ class OperationHistoryTab(AdminBaseTab):
         self.page.run_task(self._reload, uid, self._type_dd.value)
 
     def _build_sql(self, user_id, op_type, limit, offset=None):
-        where = "WHERE operation_type != 'admin_grant'"
+        # 主记录：排除 admin_grant 和 open_gift_extra（掉落记录单独查询，避免 LIMIT 截断）
+        where = "WHERE operation_type NOT IN ('admin_grant', 'open_gift_extra')"
         params = []
         if user_id:
             where += " AND user_id=?"
@@ -104,6 +105,42 @@ class OperationHistoryTab(AdminBaseTab):
                   LEFT JOIN items ti ON ioh.target_item_id=ti.id
                   ORDER BY ioh.operation_time DESC"""
         return sql, params
+
+    def _fetch_drop_records(self, main_rows, user_id=None):
+        """查询主记录对应的 open_gift_extra 掉落记录（避免 LIMIT 截断掉落）"""
+        if not main_rows:
+            return []
+        keys = set()
+        for r in main_rows:
+            if r.get('operation_type') == 'open_gift':
+                keys.add((r.get('user_id'), r.get('item_id'), str(r.get('operation_time', ''))[:19]))
+        if not keys:
+            return []
+        # 分批查询（每批 50 个键）
+        all_drops = []
+        key_list = list(keys)
+        for i in range(0, len(key_list), 50):
+            batch = key_list[i:i+50]
+            where_parts = []
+            params = []
+            for uid, iid, ot in batch:
+                where_parts.append("(e.user_id=? AND e.item_id=? AND e.operation_time=?)")
+                params.extend([uid, iid, ot])
+            sql = f"""SELECT e.*, u.username,
+                             i.name as item_name, i.quality as item_quality, i.category as item_category,
+                             ti.name as target_item_name, ti.quality as target_quality, ti.category as target_category
+                      FROM item_operation_history e
+                      LEFT JOIN users u ON e.user_id=u.user_id
+                      LEFT JOIN items i ON e.item_id=i.id
+                      LEFT JOIN items ti ON e.target_item_id=ti.id
+                      WHERE e.operation_type='open_gift_extra' AND ({' OR '.join(where_parts)})
+                      ORDER BY e.operation_time DESC"""
+            try:
+                rows = self.db.fetch_all(sql, params)
+                all_drops.extend(rows or [])
+            except Exception as e:
+                print(f"[operation_history] 查询掉落记录失败: {e}")
+        return all_drops
 
     async def _reload(self, user_id, op_type):
         import asyncio
@@ -128,8 +165,11 @@ class OperationHistoryTab(AdminBaseTab):
         rows = rows or []
         self._has_more = len(rows) > INITIAL_LIMIT
         rows = rows[:INITIAL_LIMIT]
+        # 追加对应的掉落记录（避免 LIMIT 截断）
+        drops = await asyncio.to_thread(lambda: self._fetch_drop_records(rows, user_id))
+        all_rows = rows + (drops or [])
         self._loaded = len(rows)
-        self._render_rows(rows, replace=True)
+        self._render_rows(all_rows, replace=True)
         self._search_ring.visible = False
         try:
             if self._search_ring.page is not None:
@@ -163,8 +203,11 @@ class OperationHistoryTab(AdminBaseTab):
             self._has_more = True
         else:
             self._has_more = False
+        # 追加对应的掉落记录
+        drops = await asyncio.to_thread(lambda: self._fetch_drop_records(rows, user_id))
+        all_rows = rows + (drops or [])
         self._loaded += len(rows)
-        self._render_rows(rows, replace=False)
+        self._render_rows(all_rows, replace=False)
 
     def _parse_details(self, details):
         """解析details JSON，返回字典"""
@@ -205,7 +248,7 @@ class OperationHistoryTab(AdminBaseTab):
         extra_map = {}
         for r in rows or []:
             if r.get('operation_type') == 'open_gift_extra':
-                key = (r.get('user_id'), r.get('item_id'), str(r.get('operation_time', ''))[:10])
+                key = (r.get('user_id'), r.get('item_id'), str(r.get('operation_time', ''))[:19])
                 extra_map.setdefault(key, []).append(r)
 
         tiles = []
@@ -217,6 +260,15 @@ class OperationHistoryTab(AdminBaseTab):
             meta = TYPE_META.get(op_type, {'name': op_type or '未知', 'color': '#757575', 'icon': ft.Icons.FIBER_MANUAL_RECORD})
             tname = meta['name']
             tcolor = meta['color']
+            # 开启操作：根据源物品分类区分开启宝箱/开启礼包
+            if op_type == 'open_gift':
+                item_cat = r.get('item_category', '')
+                if item_cat == '宝箱':
+                    tname = '开启宝箱'
+                elif item_cat == '礼包':
+                    tname = '开启礼包'
+                else:
+                    tname = '开启'
 
             det = self._parse_details(r.get('details', ''))
             username = r.get('username', '?')
@@ -227,6 +279,9 @@ class OperationHistoryTab(AdminBaseTab):
             src_q = r.get('item_quality') or det.get('source_quality') or det.get('source_item_quality')
             src_qty = r.get('quantity', '')
             src_color = self.QUALITY_COLORS.get(src_q, '#9E9E9E') if src_q else '#424242'
+            # 开启操作：类型标签背景色跟随物品品质色
+            if op_type == 'open_gift' and src_q:
+                tcolor = src_color
 
             # 目标物品
             tgt_name = r.get('target_item_name') or det.get('target_item_name')
@@ -243,32 +298,36 @@ class OperationHistoryTab(AdminBaseTab):
             # ---- 第三行：消耗/获得内容 ----
             content_parts = []
 
-            # 开启礼包：主掉落 + 额外掉落
+            # 开启礼包：所有掉落物品（来自 open_gift_extra 明细）
             if op_type == 'open_gift':
-                drops = []
-                if tgt_name:
-                    drops.append((tgt_name, tgt_q, tgt_qty, False))
-                key = (r.get('user_id'), r.get('item_id'), str(r.get('operation_time', ''))[:10])
+                key = (r.get('user_id'), r.get('item_id'), str(r.get('operation_time', ''))[:19])
                 extras = extra_map.get(key, [])
+                drops = []
                 for ex in extras:
                     ex_det = self._parse_details(ex.get('details', ''))
-                    ex_name = ex.get('target_item_name') or ex_det.get('target_item_name')
+                    ex_name = ex.get('target_item_name') or ex_det.get('target_item_name') or ex_det.get('item_name')
                     ex_q = ex.get('target_quality') or ex_det.get('target_quality')
-                    ex_qty = ex.get('target_quantity') or ex_det.get('target_quantity')
+                    ex_qty = ex.get('target_quantity') or ex_det.get('target_quantity') or ex_det.get('drop_quantity')
                     if ex_name:
-                        drops.append((ex_name, ex_q, ex_qty, True))
+                        drops.append((ex_name, ex_q, ex_qty))
+                # 兼容旧数据：无 open_gift_extra 明细时，从主记录 target_item 取掉落
+                if not drops and tgt_name:
+                    drops.append((tgt_name, tgt_q, tgt_qty))
                 if drops:
-                    drop_strs = []
-                    for dname, dq, dqty, is_extra in drops:
+                    content_parts.append(ft.Text("获得:", size=11, color='#2E7D32', weight=ft.FontWeight.W_600))
+                    for idx, (dname, dq, dqty) in enumerate(drops):
                         dqty_s = f"×{dqty}" if dqty and dqty != 1 else ""
-                        prefix = "额外" if is_extra else ""
-                        drop_strs.append(f"{prefix}{dname}{dqty_s}")
-                    content_parts.append(ft.Text("获得: " + "、".join(drop_strs), size=11, color='#2E7D32', weight=ft.FontWeight.W_600))
-                    if extras:
-                        content_parts.append(ft.Text(f"（共{len(drops)}个掉落，含{len(extras)}个额外）", size=9, color='#AB47BC'))
+                        dcolor = self.QUALITY_COLORS.get(dq, '#9E9E9E')
+                        prefix = "、" if idx > 0 else ""
+                        content_parts.append(ft.Text(f"{prefix}{dname}{dqty_s}", size=11, color=dcolor, weight=ft.FontWeight.W_600))
+                    det_drops = det.get('drop_count', len(drops))
+                    det_total = det.get('total_drop_quantity', sum(d[2] or 0 for d in drops))
+                    content_parts.append(ft.Text(f"（{det_drops}种，共{det_total}个）", size=9, color='#AB47BC'))
             elif tgt_name:
                 tqty_s = f"×{tgt_qty}" if tgt_qty and tgt_qty != 1 else ""
-                content_parts.append(ft.Text(f"获得: {tgt_name}{tqty_s}", size=11, color='#2E7D32', weight=ft.FontWeight.W_600))
+                tgt_color = self.QUALITY_COLORS.get(tgt_q, '#9E9E9E') if tgt_q else '#2E7D32'
+                content_parts.append(ft.Text("获得:", size=11, color='#2E7D32', weight=ft.FontWeight.W_600))
+                content_parts.append(ft.Text(f"{tgt_name}{tqty_s}", size=11, color=tgt_color, weight=ft.FontWeight.W_600))
 
             # 消耗信息
             if det.get('coin_count'):
@@ -282,9 +341,6 @@ class OperationHistoryTab(AdminBaseTab):
                 content_parts.append(ft.Text(f"余额:{det['updated_points']}", size=9, color=ft.Colors.GREY_500))
             if det.get('updated_stars') is not None:
                 content_parts.append(ft.Text(f"星星:{det['updated_stars']}", size=9, color=ft.Colors.GREY_500))
-            if det.get('chest_quality'):
-                content_parts.append(ft.Text(f"宝箱:{det['chest_quality']}", size=10,
-                    color=self.QUALITY_COLORS.get(det['chest_quality'], '#9E9E9E'), weight=ft.FontWeight.W_600))
             if det.get('source_quality') and det.get('target_quality') and op_type == 'synthesize':
                 content_parts.append(ft.Text(f"{det['source_quality']}→{det['target_quality']}", size=10,
                     color=self.QUALITY_COLORS.get(det['target_quality'], '#9E9E9E'), weight=ft.FontWeight.W_600))
@@ -307,7 +363,7 @@ class OperationHistoryTab(AdminBaseTab):
             # 合并后的完整数据（用于详情弹窗）
             full_detail = dict(det)
             if op_type == 'open_gift':
-                key = (r.get('user_id'), r.get('item_id'), str(r.get('operation_time', ''))[:10])
+                key = (r.get('user_id'), r.get('item_id'), str(r.get('operation_time', ''))[:19])
                 extras = extra_map.get(key, [])
                 if extras:
                     extra_list = []
@@ -315,12 +371,12 @@ class OperationHistoryTab(AdminBaseTab):
                         ex_det = self._parse_details(ex.get('details', ''))
                         extra_list.append({
                             'operation_id': ex.get('operation_id'),
-                            '掉落物品': ex.get('target_item_name') or ex_det.get('target_item_name'),
+                            '掉落物品': ex.get('target_item_name') or ex_det.get('target_item_name') or ex_det.get('item_name'),
                             '品质': ex.get('target_quality') or ex_det.get('target_quality'),
-                            '数量': ex.get('target_quantity') or ex_det.get('target_quantity'),
-                            '掉落序号': f"{ex_det.get('drop_index','?')}/{ex_det.get('total_drops','?')}",
+                            '数量': ex.get('target_quantity') or ex_det.get('target_quantity') or ex_det.get('drop_quantity'),
+                            '掉落序号': f"{len(extra_list)+1}",
                         })
-                    full_detail['_extra_drops'] = extra_list
+                    full_detail['_drop_details'] = extra_list
 
             # ---- 四行卡片（桌面版风格）----
             card = ft.Container(
@@ -387,10 +443,14 @@ class OperationHistoryTab(AdminBaseTab):
             'target_quantity': '目标数量',
             'reward_type': '奖励类型', 'reward_value': '奖励数值',
             'updated_points': '更新后积分', 'updated_stars': '更新后星星',
-            'coin_count': '消耗金币', 'chest_quality': '宝箱品质',
+            'coin_count': '消耗金币', 'chest_quality': '礼包品质',
             'drop_index': '掉落序号', 'total_drops': '总掉落数',
             'is_extra_drop': '是否额外掉落', 'operation_time': '操作时间',
             'quantity': '数量',
+            'gift_name': '礼包名称', 'gift_quantity': '礼包数量',
+            'drop_count': '掉落种类', 'total_drop_quantity': '掉落总数',
+            'item_name': '物品名称', 'drop_quantity': '掉落数量',
+            'before_quantity': '操作前数量', 'before_target_quantity': '操作前数量',
         }
         REWARD_MAP = {'score': '积分', 'exp': '经验', 'lottery': '抽奖次数', 'star': '星星', 'time': '分钟'}
 
@@ -398,8 +458,18 @@ class OperationHistoryTab(AdminBaseTab):
         # 基础信息（来自row）
         if row:
             op_type = row.get('operation_type', '')
-            meta = TYPE_META.get(op_type, {'name': op_type})
-            lines.append(("操作类型", meta['name']))
+            meta = TYPE_META.get(op_type, {'name': op_type or '未知'})
+            type_name = meta['name']
+            # 开启操作：根据源物品分类区分开启宝箱/开启礼包
+            if op_type == 'open_gift':
+                item_cat = row.get('item_category', '')
+                if item_cat == '宝箱':
+                    type_name = '开启宝箱'
+                elif item_cat == '礼包':
+                    type_name = '开启礼包'
+                else:
+                    type_name = '开启'
+            lines.append(("操作类型", type_name))
             lines.append(("操作ID", str(row.get('operation_id', ''))))
             lines.append(("用户", row.get('username', '?')))
             lines.append(("用户ID", str(row.get('user_id', ''))))
@@ -422,7 +492,7 @@ class OperationHistoryTab(AdminBaseTab):
             if k == '_raw':
                 lines.append(("备注", v))
                 continue
-            if k == '_extra_drops':
+            if k == '_drop_details':
                 continue
             label = FIELD_MAP.get(k, k)
             if k == 'reward_type' and v in REWARD_MAP:
@@ -431,12 +501,23 @@ class OperationHistoryTab(AdminBaseTab):
                 v = "是" if v else "否"
             lines.append((label, str(v)))
 
-        # 额外掉落
-        if det.get('_extra_drops'):
+        # 掉落明细
+        drop_list = det.get('_drop_details')
+        # 兼容旧数据：无 _drop_details 时从 row target_item 取
+        if not drop_list and row and row.get('target_item_name'):
+            drop_list = [{
+                '掉落物品': row.get('target_item_name'),
+                '品质': row.get('target_quality'),
+                '数量': row.get('target_quantity'),
+            }]
+        if drop_list:
             lines.append(("---", "---"))
-            lines.append(("额外掉落", f"共{len(det['_extra_drops'])}个"))
-            for i, ex in enumerate(det['_extra_drops'], 1):
-                lines.append((f"  额外{i}", f"{ex.get('掉落物品','?')} ×{ex.get('数量','?')} ({ex.get('品质','?')}) 序号{ex.get('掉落序号','?')}"))
+            lines.append(("掉落明细", f"共{len(drop_list)}种"))
+            for i, ex in enumerate(drop_list, 1):
+                dname = ex.get('掉落物品', ex.get('item_name', '?'))
+                dqty = ex.get('数量', ex.get('drop_quantity', '?'))
+                dq = ex.get('品质', ex.get('target_quality', '?'))
+                lines.append((f"  掉落{i}", f"{dname} ×{dqty} ({dq})"))
 
         # 构建列表
         rows_ui = []

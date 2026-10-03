@@ -7,8 +7,8 @@ on:
 
 env:
   APP_NAME: "单词学习"
-  VERSION: "1.5.1"
-  BUILD_NUMBER: "21"
+  VERSION: "1.5.2"
+  BUILD_NUMBER: "22"
 
 jobs:
   build-apk:

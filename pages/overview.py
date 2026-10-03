@@ -161,7 +161,8 @@ class OverviewPage:
                 params = [uid] + list(grade_word_ids)
                 ans_row = self.db.fetch_one(
                     f"SELECT COUNT(*) as cnt, COALESCE(SUM(duration),0) as dur, "
-                    f"COALESCE(SUM(used_clue),0) as clues FROM words_answer_records {where}",
+                    f"COALESCE(SUM(used_clue),0) as clues, MAX(answer_time) as last_answer "
+                    f"FROM words_answer_records {where}",
                     params
                 )
                 if ans_row:
@@ -169,6 +170,7 @@ class OverviewPage:
                     d['total_hours'] = float(ans_row['dur'] or 0) / 3600.0
                     d['avg_duration'] = (float(ans_row['dur'] or 0) / int(ans_row['cnt'] or 1)) if ans_row['cnt'] else 0
                     d['clue_dependency'] = (float(ans_row['clues'] or 0) / int(ans_row['cnt'] or 1)) if ans_row['cnt'] else 0
+                    d['last_answer'] = str(ans_row['last_answer'] or '')[:10]
                 # 日均学习（最近30天）
                 active_row = self.db.fetch_one(
                     f"SELECT COUNT(DISTINCT DATE(answer_time)) as days FROM words_answer_records "
@@ -191,7 +193,8 @@ class OverviewPage:
             params = [uid]
             ans_row = self.db.fetch_one(
                 f"SELECT COUNT(*) as cnt, COALESCE(SUM(duration),0) as dur, "
-                f"COALESCE(SUM(used_clue),0) as clues FROM words_answer_records {where}",
+                f"COALESCE(SUM(used_clue),0) as clues, MAX(answer_time) as last_answer "
+                f"FROM words_answer_records {where}",
                 params
             )
             if ans_row:
@@ -199,6 +202,7 @@ class OverviewPage:
                 d['total_hours'] = float(ans_row['dur'] or 0) / 3600.0
                 d['avg_duration'] = (float(ans_row['dur'] or 0) / int(ans_row['cnt'] or 1)) if ans_row['cnt'] else 0
                 d['clue_dependency'] = (float(ans_row['clues'] or 0) / int(ans_row['cnt'] or 1)) if ans_row['cnt'] else 0
+                d['last_answer'] = str(ans_row['last_answer'] or '')[:10]
             # 日均学习（最近30天）
             active_row = self.db.fetch_one(
                 f"SELECT COUNT(DISTINCT DATE(answer_time)) as days FROM words_answer_records "
@@ -372,6 +376,7 @@ class OverviewPage:
             controls=[self._build_overview_item(*item) for item in overview_items],
             runs_count=2, spacing=10, run_spacing=10, child_aspect_ratio=1.6
         )
+        last_answer = self.data.get('last_answer', '') or '-'
         overview_card = ft.Container(
             padding=ft.padding.all(16),
             gradient=ft.LinearGradient(
@@ -382,7 +387,14 @@ class OverviewPage:
             border_radius=28,
             shadow=ft.BoxShadow(blur_radius=24, color=ft.Colors.BLUE_200, spread_radius=2, offset=ft.Offset(0, 3)),
             margin=ft.margin.symmetric(horizontal=20, vertical=8),
-            content=ft.Column([overview_grid], spacing=8)
+            content=ft.Column([
+                overview_grid,
+                ft.Container(content=ft.Row([
+                    ft.Icon(ft.Icons.SCHEDULE, size=11, color=ft.Colors.GREY_500),
+                    ft.Text(f"最近学习: {last_answer}", size=10, color=ft.Colors.GREY_500),
+                ], spacing=3, alignment=ft.MainAxisAlignment.CENTER),
+                    padding=ft.padding.only(top=2)),
+            ], spacing=8)
         )
 
         # 详细指标
