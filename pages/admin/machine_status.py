@@ -121,10 +121,25 @@ class MachineStatusTab(AdminBaseTab):
                 if uids:
                     placeholders = ','.join(['?'] * len(uids))
                     urows = self.db.fetch_all(
-                        f"SELECT user_id, username, nickname, user_type, level_id, score, total_stars, total_time "
+                        f"SELECT user_id, username, nickname, user_type, level_id, score, total_stars, total_time, last_login_date "
                         f"FROM users WHERE user_id IN ({placeholders})", uids)
                     for ur in (urows or []):
                         user_info[ur['user_id']] = ur
+                    # 批量查询每个用户最新的登录会话（user_sessions）
+                    try:
+                        srows = self.db.fetch_all(
+                            f"SELECT s.user_id, s.login_time, s.logout_time, s.is_active "
+                            f"FROM user_sessions s "
+                            f"INNER JOIN (SELECT user_id, MAX(login_time) as max_login FROM user_sessions WHERE user_id IN ({placeholders}) GROUP BY user_id) latest "
+                            f"ON s.user_id=latest.user_id AND s.login_time=latest.max_login", uids)
+                        for sr in (srows or []):
+                            uid = sr['user_id']
+                            if uid in user_info:
+                                user_info[uid]['_session_login_time'] = sr.get('login_time')
+                                user_info[uid]['_session_logout_time'] = sr.get('logout_time')
+                                user_info[uid]['_session_is_active'] = sr.get('is_active', 0)
+                    except Exception:
+                        pass  # user_sessions 表不存在时忽略
                 return rows, user_info, None
             except Exception as e:
                 return None, {}, str(e)
@@ -162,7 +177,6 @@ class MachineStatusTab(AdminBaseTab):
             uptime_sec = r.get('uptime_seconds', 0) or 0
             fg_app = r.get('foreground_app', '') or ''
             os_ver = r.get('os_version', '') or ''
-            login_dur = r.get('login_duration', 0) or 0
             autostart = r.get('autostart_enabled', 0)
 
             # 在线判断：心跳超过2分钟视为电脑离线
@@ -179,7 +193,9 @@ class MachineStatusTab(AdminBaseTab):
             online_text = '电脑在线' if is_online else f'电脑离线({int(hb_age//60)}分前)'
 
             # 登录状态判断：区分"电脑离线"和"登录离线（电脑在线但未登录学习程序）"
-            is_logged_in = uid > 0 and bool(uname)
+            is_logged_in = uid > 0  # 只要有user_id即认为已登录（用户名从users表取）
+            # 优先用users表的用户名和昵称
+            db_username = uinfo.get('username') or uname or f"用户{uid}"
             if not is_online:
                 # 电脑离线：watchdog没运行，不判断登录状态
                 login_label = '电脑离线'
@@ -188,7 +204,7 @@ class MachineStatusTab(AdminBaseTab):
             elif is_logged_in:
                 # 电脑在线 + 已登录学习程序（显示用户名+昵称）
                 nickname = uinfo.get('nickname') or ''
-                display_name = f"{uname}({nickname})" if nickname else uname
+                display_name = f"{db_username}({nickname})" if nickname else db_username
                 login_label = f"学习中: {display_name}"
                 login_color = '#43A047'
                 login_icon = ft.Icons.SCHOOL
@@ -216,18 +232,60 @@ class MachineStatusTab(AdminBaseTab):
 
             # 开机时长格式化
             uptime_str = self._fmt_duration(uptime_sec)
-            # 登录时长使用 users.total_time（分钟），与用户管理模块一致
-            total_minutes = uinfo.get('total_time', 0) or 0
-            login_str = f"{total_minutes}分钟" if total_minutes > 0 else "无记录"
+            # 本次登录学习后的时长（优先用 user_sessions.login_time，回退到 users.last_login_date）
+            if uid > 0:
+                sess_login = uinfo.get('_session_login_time')
+                sess_logout = uinfo.get('_session_logout_time')
+                sess_active = uinfo.get('_session_is_active', 0)
+                if sess_login:
+                    try:
+                        # login_time 是 DATETIME 字符串（如 "2026-08-18 18:30:21"）
+                        lt = datetime.datetime.strptime(str(sess_login)[:19], '%Y-%m-%d %H:%M:%S')
+                        if sess_logout and int(sess_active) == 0:
+                            # 已退出：显示退出时的会话时长
+                            logout_dt = datetime.datetime.strptime(str(sess_logout)[:19], '%Y-%m-%d %H:%M:%S')
+                            login_sec = int((logout_dt - lt).total_seconds())
+                            login_str = f"{self._fmt_duration(login_sec)}(已退出)"
+                        else:
+                            # 活跃中：当前时间 - 登录时间
+                            login_sec = int((now - lt).total_seconds())
+                            login_str = self._fmt_duration(login_sec) if login_sec > 0 else "刚登录"
+                    except Exception:
+                        login_str = "未知"
+                else:
+                    # 回退到 users.last_login_date
+                    last_login = uinfo.get('last_login_date', '') or ''
+                    if last_login:
+                        try:
+                            lt = datetime.datetime.strptime(str(last_login)[:19], '%Y-%m-%d %H:%M:%S')
+                            login_sec = int((now - lt).total_seconds())
+                            login_str = self._fmt_duration(login_sec) if login_sec > 0 else "刚登录"
+                        except Exception:
+                            login_str = "未知"
+                    else:
+                        login_str = "未知"
+            else:
+                login_str = "未登录"
 
             # 磁盘使用率
             disk_pct = 0
             if disk_total and disk_total > 0:
                 disk_pct = round((1 - disk_free / disk_total) * 100, 1)
 
+            # 其他字段
+            screen_on = r.get('screen_on', 1)
+            screen_str = '亮屏' if screen_on else '息屏'
+            charging = r.get('battery_charging', 0)
+            charging_str = '充电中' if charging else '未充电'
+            version = r.get('version', '') or '未知'
+            group_name = r.get('group_name', '') or '默认'
+            created_at = str(r.get('created_at', ''))[:19] or '未知'
+            last_shutdown = str(r.get('last_shutdown', ''))[:19] or '无'
+            net_type = r.get('network_type', '') or '未知'
+
             tile = ft.Container(
                 content=ft.Column([
-                    # === 顶部：主机名 + 状态 + 在线 ===
+                    # === 顶部：主机名 + 状态 + 在线 + 电量 ===
                     ft.Row([
                         ft.Container(
                             content=ft.Icon(ft.Icons.COMPUTER, size=20, color=ft.Colors.WHITE),
@@ -251,16 +309,19 @@ class MachineStatusTab(AdminBaseTab):
                             ], spacing=0),
                         ], spacing=1, tight=True),
                         ft.Container(expand=True),
-                        # 电量大图标
+                        # 电量大图标 + 充电状态
                         ft.Column([
-                            ft.Icon(bat_icon, size=22, color=bat_color),
+                            ft.Row([
+                                ft.Icon(bat_icon, size=20, color=bat_color),
+                                ft.Icon(ft.Icons.BOLT, size=10, color='#FFC107') if charging else ft.Container(width=10),
+                            ], spacing=1),
                             ft.Text(f"{battery}%", size=10, color=bat_color, weight=ft.FontWeight.W_700),
                         ], spacing=0, alignment=ft.MainAxisAlignment.CENTER,
                           horizontal_alignment=ft.CrossAxisAlignment.CENTER),
                     ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                     # === 分隔线 ===
                     ft.Container(height=0.5, bgcolor=ft.Colors.GREY_200),
-                    # === 登录状态 + IP ===
+                    # === 登录状态 + IP + 最后活跃 ===
                     ft.Row([
                         ft.Icon(login_icon, size=13, color=login_color),
                         ft.Container(
@@ -274,31 +335,45 @@ class MachineStatusTab(AdminBaseTab):
                         ft.Icon(ft.Icons.ACCESS_TIME, size=11, color='#90A4AE'),
                         ft.Text(f"活跃 {last_active or '无'}", size=9, color='#90A4AE'),
                     ], spacing=3, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                    # === 系统指标条（更宽更清晰） ===
+                    # === 系统指标条 ===
                     ft.Row([
                         self._metric_bar('CPU', cpu, '#1565C0', 80),
                         self._metric_bar('内存', mem, '#8E24AA', 80),
                         self._metric_bar('磁盘', disk_pct, '#00838F', 80),
                     ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER,
                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                    # === 详细信息网格 ===
+                    # === 详细信息网格（全部字段，3列x多行） ===
                     ft.Container(
                         content=ft.Column([
-                            # 用户信息行（已登录时显示）
-                            *([ft.Row([
-                                self._info_item(ft.Icons.PERSON, '用户', f"ID:{uid} {uname}", '#1565C0'),
-                                self._info_item(ft.Icons.STAR, '等级', f"Lv.{uinfo.get('level_id',1)}", '#FF9800'),
-                                self._info_item(ft.Icons.MONETIZATION_ON, '积分', str(uinfo.get('score',0)), '#43A047'),
-                            ], spacing=4)] if is_logged_in else []),
+                            # 第1行：时长类
                             ft.Row([
                                 self._info_item(ft.Icons.SCHEDULE, '开机', uptime_str, '#1565C0'),
-                                self._info_item(ft.Icons.LOGIN, '总时长', login_str, '#43A047'),
-                                self._info_item(ft.Icons.STORAGE, 'C盘', f'{disk_free}/{disk_total}GB', '#00838F'),
+                                self._info_item(ft.Icons.LOGIN, '本次登录', login_str, '#43A047'),
+                                self._info_item(ft.Icons.SCREEN_LOCK_PORTRAIT, '屏幕', screen_str, '#7B1FA2'),
                             ], spacing=4),
+                            # 第2行：系统类
                             ft.Row([
                                 self._info_item(ft.Icons.SYSTEM_UPDATE, '系统', os_ver or '未知', '#757575'),
-                                self._info_item(ft.Icons.WIFI, '网络', r.get('network_type','') or '未知', '#757575'),
+                                self._info_item(ft.Icons.WIFI, '网络', net_type, '#757575'),
+                                self._info_item(ft.Icons.STORAGE, 'C盘', f'{disk_free}/{disk_total}GB', '#00838F'),
+                            ], spacing=4),
+                            # 第3行：配置类
+                            ft.Row([
                                 self._info_item(ft.Icons.AUTORENEW, '自启', '已启用' if autostart else '未启用', '#43A047' if autostart else '#9E9E9E'),
+                                self._info_item(ft.Icons.BOLT, '充电', charging_str, '#FFC107' if charging else '#9E9E9E'),
+                                self._info_item(ft.Icons.GROUP, '分组', group_name, '#5C6BC0'),
+                            ], spacing=4),
+                            # 第4行：版本与用户
+                            ft.Row([
+                                self._info_item(ft.Icons.BUILD, '版本', version, '#757575'),
+                                self._info_item(ft.Icons.PERSON, '用户ID', str(uid) if uid > 0 else '未登录', '#1565C0'),
+                                self._info_item(ft.Icons.PERSON_OUTLINE, '用户名', db_username if uid > 0 else '未登录', '#1565C0'),
+                            ], spacing=4),
+                            # 第5行：时间类
+                            ft.Row([
+                                self._info_item(ft.Icons.FAVORITE, '心跳', heartbeat or '无', '#EF5350'),
+                                self._info_item(ft.Icons.POWER_SETTINGS_NEW, '最后关机', last_shutdown, '#757575'),
+                                self._info_item(ft.Icons.CREATE, '首次上报', created_at, '#757575'),
                             ], spacing=4),
                         ], spacing=3, tight=True),
                         padding=ft.padding.symmetric(horizontal=8, vertical=6),
@@ -314,12 +389,10 @@ class MachineStatusTab(AdminBaseTab):
                         padding=ft.padding.symmetric(horizontal=8, vertical=4),
                         bgcolor=ft.Colors.with_opacity(0.06, '#FF9800'), border_radius=6,
                     )] if fg_app else []),
-                    # === 底部：机器ID + 心跳 ===
+                    # === 底部：机器ID ===
                     ft.Row([
-                        ft.Text(f"ID: {mid[:24]}", size=8, color='#B0BEC5'),
-                        ft.Container(expand=True),
-                        ft.Icon(ft.Icons.FAVORITE, size=8, color='#EF5350'),
-                        ft.Text(f"心跳 {heartbeat or '无'}", size=8, color='#B0BEC5'),
+                        ft.Icon(ft.Icons.FINGERPRINT, size=8, color='#B0BEC5'),
+                        ft.Text(f"机器ID: {mid[:28]}", size=8, color='#B0BEC5'),
                     ], spacing=3, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ], spacing=6, tight=True),
                 padding=ft.padding.symmetric(horizontal=14, vertical=12),

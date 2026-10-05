@@ -22,6 +22,7 @@ from pages.admin.cihai_material import CihaiMaterialTab
 from pages.admin.message_admin import MessageAdminTab
 from pages.admin.remote_control import RemoteControlTab
 from pages.admin.machine_status import MachineStatusTab
+from pages.admin.monitor_events import MonitorEventsTab
 
 
 class AdminPage:
@@ -54,6 +55,7 @@ class AdminPage:
             ("背包管理", ft.Icons.SHOPPING_BAG, BackpackTab),
             ("远程控制", ft.Icons.CAST, RemoteControlTab),
             ("机器状态", ft.Icons.COMPUTER, MachineStatusTab),
+            ("监控事件", ft.Icons.EVENT_NOTE, MonitorEventsTab),
             ("管理日志", ft.Icons.ADMIN_PANEL_SETTINGS, AdminLogsTab),
         ]
         self._tab_instances = {}   # {index: tab_instance}

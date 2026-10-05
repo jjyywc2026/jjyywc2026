@@ -1,6 +1,6 @@
 [project]
 name = "wordlearning"
-version = "1.5.3"
+version = "1.5.4"
 description = "英语单词学习 App"
 requires-python = ">=3.9"
 dependencies = [
