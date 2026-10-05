@@ -93,20 +93,53 @@ class RemoteControlTab(AdminBaseTab):
         if err:
             self._machines = []
             return
-        self._machines = [(r.get('machine_id',''), r.get('hostname','?'), r.get('status','unknown')) for r in (rows or [])]
+        self._machines = [(r.get('machine_id',''), r.get('hostname','?'), r.get('status','offline'),
+                            r.get('current_user_id',0) or 0, r.get('current_username','') or '') for r in (rows or [])]
 
     def _target_options(self):
-        opts = [ft.dropdown.Option(key="0", text="广播（所有电脑）")]
-        for uid, uname in self._users:
-            opts.append(ft.dropdown.Option(key=str(uid), text=f"{uid}: {uname}"))
+        """统一目标选择：广播 / 按用户 / 指定机器（合2为1）"""
+        opts = [
+            ft.dropdown.Option(key="broadcast", text="📢 广播（所有电脑所有用户）"),
+        ]
+        # 按用户分组
+        if self._users:
+            for uid, uname in self._users:
+                opts.append(ft.dropdown.Option(key=f"user:{uid}", text=f"👤 用户 {uid}: {uname}"))
+        # 指定机器
+        if self._machines:
+            for mid, hname, status, cuid, cuname in self._machines:
+                if cuid > 0:
+                    label = f"🖥 {hname} → {cuname}(ID:{cuid})"
+                else:
+                    label = f"🖥 {hname} → 未登录学习程序"
+                opts.append(ft.dropdown.Option(key=f"machine:{mid}", text=label))
         return opts
 
-    def _current_target_id(self):
-        val = self._target_dd.value if self._target_dd else "0"
+    def _parse_target(self):
+        """解析目标选择，返回 (user_id, machine_id, target_label)"""
+        val = self._target_dd.value if self._target_dd else "broadcast"
+        if val == "broadcast" or val == "0":
+            return 0, "", "广播"
+        if val.startswith("user:"):
+            uid = int(val.split(":", 1)[1])
+            label = self._target_label(uid)
+            return uid, "", label
+        if val.startswith("machine:"):
+            mid = val.split(":", 1)[1]
+            # 查找该机器的当前用户
+            for m, hname, status, cuid, cuname in self._machines:
+                if m == mid:
+                    if cuid > 0:
+                        return cuid, mid, f"{hname}({cuname})"
+                    else:
+                        return 0, mid, f"{hname}(未登录)"
+            return 0, mid, mid[:12]
+        # 兼容旧格式（纯数字user_id）
         try:
-            return int(val)
+            uid = int(val)
+            return uid, "", self._target_label(uid)
         except (ValueError, TypeError):
-            return 0
+            return 0, "", "广播" 
 
     def _target_label(self, uid):
         if uid == 0:
@@ -119,38 +152,34 @@ class RemoteControlTab(AdminBaseTab):
     async def _render(self):
         await asyncio.sleep(0.02)
 
-        # ---- 目标用户选择 ----
+        # ---- 统一目标选择（用户+机器合2为1） ----
         self._target_dd = ft.Dropdown(
-            options=self._target_options(), value="0",
-            label="目标用户", border_radius=8, text_size=12, dense=True,
-            content_padding=ft.padding.symmetric(horizontal=8, vertical=0),
-            expand=True)
-        # ---- 目标机器选择（可选，指定机器则只发给该机器） ----
-        machine_opts = [ft.dropdown.Option(key="", text="不指定（按用户）")]
-        for mid, hname, status in self._machines:
-            machine_opts.append(ft.dropdown.Option(key=mid, text=f"{hname} ({status})"))
-        self._machine_dd = ft.Dropdown(
-            options=machine_opts, value="",
-            label="目标机器（可选）", border_radius=8, text_size=12, dense=True,
+            options=self._target_options(), value="broadcast",
+            label="控制目标", border_radius=8, text_size=12, dense=True,
             content_padding=ft.padding.symmetric(horizontal=8, vertical=0),
             expand=True)
 
-        # ---- 命令按钮网格 ----
+        # ---- 命令按钮网格（美化：图标+文字卡片） ----
         btn_rows = []
         row_btns = []
         for i, (cmd, name, icon, color, desc) in enumerate(COMMANDS):
             btn = ft.Container(
                 content=ft.Column([
-                    ft.Icon(icon, size=22, color=ft.Colors.WHITE),
-                    ft.Text(name, size=11, color=ft.Colors.WHITE, weight=ft.FontWeight.W_600),
-                ], spacing=3, alignment=ft.MainAxisAlignment.CENTER,
+                    ft.Container(
+                        content=ft.Icon(icon, size=20, color=color),
+                        width=36, height=36, border_radius=10,
+                        bgcolor=ft.Colors.with_opacity(0.1, color),
+                        alignment=ft.alignment.center),
+                    ft.Text(name, size=10, color='#37474F', weight=ft.FontWeight.W_700),
+                ], spacing=4, alignment=ft.MainAxisAlignment.CENTER,
                   horizontal_alignment=ft.CrossAxisAlignment.CENTER, tight=True),
-                bgcolor=color, border_radius=10,
-                padding=ft.padding.symmetric(vertical=12, horizontal=4),
+                bgcolor=ft.Colors.WHITE, border_radius=12,
+                padding=ft.padding.symmetric(vertical=10, horizontal=4),
                 expand=True, alignment=ft.alignment.center,
                 on_click=lambda e, c=cmd, n=name: self._send_command(c, n),
-                ink=True,
-                tooltip=desc,
+                ink=True, tooltip=desc,
+                border=ft.border.all(1, ft.Colors.with_opacity(0.1, color)),
+                shadow=ft.BoxShadow(blur_radius=3, color="#0A000000", offset=ft.Offset(0, 1)),
             )
             row_btns.append(btn)
             if len(row_btns) == 3:
@@ -195,29 +224,54 @@ class RemoteControlTab(AdminBaseTab):
         ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
         self._content.controls = [
-            ft.Text("远程控制", size=16, weight=ft.FontWeight.BOLD, color='#263238'),
+            ft.Row([
+                ft.Container(
+                    content=ft.Icon(ft.Icons.CAST, size=18, color=ft.Colors.WHITE),
+                    width=32, height=32, border_radius=8, bgcolor='#1565C0',
+                    alignment=ft.alignment.center),
+                ft.Text("远程控制", size=16, weight=ft.FontWeight.BOLD, color='#263238'),
+            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             ft.Container(
-                content=ft.Row([self._target_dd, self._machine_dd], spacing=8),
-                padding=ft.padding.symmetric(horizontal=10, vertical=6),
-                bgcolor=ft.Colors.WHITE, border_radius=10,
-                shadow=ft.BoxShadow(blur_radius=4, color="#10000000", offset=ft.Offset(0, 2)),
+                content=ft.Column([
+                    ft.Text("控制目标", size=10, color='#78909C', weight=ft.FontWeight.W_600),
+                    self._target_dd,
+                ], spacing=3, tight=True),
+                padding=ft.padding.symmetric(horizontal=12, vertical=8),
+                bgcolor=ft.Colors.WHITE, border_radius=12,
+                shadow=ft.BoxShadow(blur_radius=6, color="#15000000", offset=ft.Offset(0, 2)),
+                border=ft.border.all(0.5, ft.Colors.GREY_200),
             ),
             ft.Container(
                 content=ft.Column(btn_rows, spacing=8),
-                padding=10, bgcolor=ft.Colors.WHITE, border_radius=10,
-                shadow=ft.BoxShadow(blur_radius=4, color="#10000000", offset=ft.Offset(0, 2)),
+                padding=10, bgcolor=ft.Colors.WHITE, border_radius=12,
+                shadow=ft.BoxShadow(blur_radius=6, color="#15000000", offset=ft.Offset(0, 2)),
+                border=ft.border.all(0.5, ft.Colors.GREY_200),
             ),
             ft.Container(
-                content=ft.Row([self._warning_tf, warning_btn], spacing=8,
-                               vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                padding=10, bgcolor=ft.Colors.WHITE, border_radius=10,
-                shadow=ft.BoxShadow(blur_radius=4, color="#10000000", offset=ft.Offset(0, 2)),
+                content=ft.Column([
+                    ft.Row([
+                        ft.Icon(ft.Icons.NOTIFICATIONS_ACTIVE, size=14, color='#7B1FA2'),
+                        ft.Text("调整警告次数", size=11, color='#37474F', weight=ft.FontWeight.W_600),
+                    ], spacing=4),
+                    ft.Row([self._warning_tf, warning_btn], spacing=8,
+                           vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ], spacing=4, tight=True),
+                padding=10, bgcolor=ft.Colors.WHITE, border_radius=12,
+                shadow=ft.BoxShadow(blur_radius=6, color="#15000000", offset=ft.Offset(0, 2)),
+                border=ft.border.all(0.5, ft.Colors.GREY_200),
             ),
             ft.Container(
-                content=ft.Row([self._exit_timer_tf, exit_timer_btn], spacing=8,
-                               vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                padding=10, bgcolor=ft.Colors.WHITE, border_radius=10,
-                shadow=ft.BoxShadow(blur_radius=4, color="#10000000", offset=ft.Offset(0, 2)),
+                content=ft.Column([
+                    ft.Row([
+                        ft.Icon(ft.Icons.TIMER, size=14, color='#00897B'),
+                        ft.Text("定时退出（到期自动恢复）", size=11, color='#37474F', weight=ft.FontWeight.W_600),
+                    ], spacing=4),
+                    ft.Row([self._exit_timer_tf, exit_timer_btn], spacing=8,
+                           vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ], spacing=4, tight=True),
+                padding=10, bgcolor=ft.Colors.WHITE, border_radius=12,
+                shadow=ft.BoxShadow(blur_radius=6, color="#15000000", offset=ft.Offset(0, 2)),
+                border=ft.border.all(0.5, ft.Colors.GREY_200),
             ),
             refresh_row,
             self._history_list,
@@ -227,16 +281,14 @@ class RemoteControlTab(AdminBaseTab):
 
     def _send_command(self, cmd, name):
         """发送普通命令"""
-        tid = self._current_target_id()
-        target = self._target_label(tid)
+        tid, mid, target = self._parse_target()
         self.confirm_and_run(
             f"发送{name}", f"确定向「{target}」发送「{name}」命令吗？",
-            self._do_send, cmd, name, tid,
+            self._do_send, cmd, name, tid, mid,
             success_msg=f"已发送{name} → {target}", loading_msg="发送中...")
 
-    async def _do_send(self, cmd, name, target_id):
+    async def _do_send(self, cmd, name, target_id, machine_id=""):
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        machine_id = self._machine_dd.value if self._machine_dd else ""
         self.db.execute(
             "INSERT INTO control_commands (command, created_at, processed, user_id, machine_id) VALUES (?, ?, 0, ?, ?)",
             (cmd, now, target_id, machine_id or ""))
@@ -257,18 +309,16 @@ class RemoteControlTab(AdminBaseTab):
         except ValueError:
             self.snack("请输入有效的非负整数")
             return
-        tid = self._current_target_id()
-        target = self._target_label(tid)
+        tid, mid, target = self._parse_target()
         cmd = f"set_warning:{n}"
         self.confirm_and_run(
             "设置警告次数", f"确定向「{target}」设置警告次数为 {n} 吗？",
-            self._do_send, cmd, f"设置警告次数={n}", tid,
+            self._do_send, cmd, f"设置警告次数={n}", tid, mid,
             success_msg=f"已发送设置警告次数={n} → {target}", loading_msg="发送中...")
 
     def _send_exit_timer(self, e=None):
         """发送 exit:N 命令，N分钟后自动恢复监控"""
-        tid = self._current_target_id()
-        target = self._target_label(tid)
+        tid, mid, target = self._parse_target()
         val = (self._exit_timer_tf.value or "").strip()
         if not val:
             val = "30"  # 默认30分钟
@@ -282,7 +332,7 @@ class RemoteControlTab(AdminBaseTab):
         cmd = f"exit:{n}"
         self.confirm_and_run(
             "定时退出", f"确定向「{target}」发送定时退出 {n} 分钟吗？（到期自动恢复监控）",
-            self._do_send, cmd, f"定时退出={n}分钟", tid,
+            self._do_send, cmd, f"定时退出={n}分钟", tid, mid,
             success_msg=f"已发送定时退出={n}分钟 → {target}", loading_msg="发送中...")
 
     async def _load_history(self):
@@ -369,37 +419,45 @@ class RemoteControlTab(AdminBaseTab):
             machine_hostname = r.get('machine_hostname', '') or ''
 
             tile = ft.Container(
-                content=ft.Column([
-                    ft.Row([
-                        ft.Text(name, size=13, weight=ft.FontWeight.W_700, color='#263238'),
-                        ft.Container(
-                            content=ft.Text(target_text, size=9, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
-                            bgcolor=target_color, border_radius=3,
-                            padding=ft.padding.symmetric(horizontal=5, vertical=1)),
-                    ] + ([ft.Container(
-                            content=ft.Text(machine_hostname or machine_id[:12], size=9, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
-                            bgcolor='#00838F', border_radius=3,
-                            padding=ft.padding.symmetric(horizontal=5, vertical=1))] if machine_id else []) + [
-                        ft.Container(expand=True),
-                        ft.Container(
-                            content=ft.Text(status_text, size=9, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
-                            bgcolor=status_color, border_radius=3,
-                            padding=ft.padding.symmetric(horizontal=5, vertical=1)),
-                    ] + ([ft.IconButton(ft.Icons.DELETE, icon_size=14, icon_color='#E53935',
-                                         tooltip="删除此命令", on_click=lambda e, cid=r.get('id'): self._delete_command(cid))]
-                         if not is_done and not is_expired else []),
-                    spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                    ft.Row([
-                        ft.Icon(ft.Icons.SCHEDULE, size=10, color=ft.Colors.GREY_400),
-                        ft.Text(f"发送于 {created}{processed_str}", size=10, color=ft.Colors.GREY_500),
-                        ft.Container(expand=True),
-                        ft.Text(f"#{r.get('id','')}", size=9, color=ft.Colors.GREY_300),
-                    ], spacing=3, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                ], spacing=2, tight=True),
-                padding=ft.padding.symmetric(horizontal=10, vertical=7),
-                bgcolor=ft.Colors.WHITE, border_radius=8,
-                margin=ft.margin.only(bottom=3),
-                border=ft.border.all(0.5, ft.Colors.with_opacity(0.08, status_color)),
+                content=ft.Row([
+                    # 左侧状态色条
+                    ft.Container(width=3, bgcolor=status_color, border_radius=2),
+                    ft.Container(width=8),
+                    # 右侧内容
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Row([
+                                ft.Text(name, size=13, weight=ft.FontWeight.W_800, color='#263238'),
+                                ft.Container(
+                                    content=ft.Text(target_text, size=8, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
+                                    bgcolor=target_color, border_radius=3,
+                                    padding=ft.padding.symmetric(horizontal=5, vertical=1)),
+                            ] + ([ft.Container(
+                                    content=ft.Text(machine_hostname or machine_id[:10], size=8, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
+                                    bgcolor='#00838F', border_radius=3,
+                                    padding=ft.padding.symmetric(horizontal=5, vertical=1))] if machine_id else []) + [
+                                ft.Container(expand=True),
+                                ft.Container(
+                                    content=ft.Text(status_text, size=8, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
+                                    bgcolor=status_color, border_radius=3,
+                                    padding=ft.padding.symmetric(horizontal=5, vertical=1)),
+                            ] + ([ft.IconButton(ft.Icons.DELETE, icon_size=14, icon_color='#E53935',
+                                                 tooltip="删除此命令", on_click=lambda e, cid=r.get('id'): self._delete_command(cid))]
+                                 if not is_done and not is_expired else []),
+                            spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                            ft.Row([
+                                ft.Icon(ft.Icons.SCHEDULE, size=10, color=ft.Colors.GREY_400),
+                                ft.Text(f"发送 {created}{processed_str}", size=9, color=ft.Colors.GREY_500),
+                                ft.Container(expand=True),
+                                ft.Text(f"#{r.get('id','')}", size=8, color=ft.Colors.GREY_300),
+                            ], spacing=3, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        ], spacing=2, tight=True),
+                        expand=True),
+                ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.START),
+                padding=ft.padding.symmetric(horizontal=8, vertical=8),
+                bgcolor=ft.Colors.WHITE, border_radius=10,
+                margin=ft.margin.only(bottom=4),
+                shadow=ft.BoxShadow(blur_radius=3, color="#0A000000", offset=ft.Offset(0, 1)),
             )
             tiles.append(tile)
 
