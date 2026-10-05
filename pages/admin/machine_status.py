@@ -321,7 +321,7 @@ class MachineStatusTab(AdminBaseTab):
                     ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                     # === 分隔线 ===
                     ft.Container(height=0.5, bgcolor=ft.Colors.GREY_200),
-                    # === 登录状态 + IP + 最后活跃 ===
+                    # === 登录状态 + IP ===
                     ft.Row([
                         ft.Icon(login_icon, size=13, color=login_color),
                         ft.Container(
@@ -331,17 +331,13 @@ class MachineStatusTab(AdminBaseTab):
                         ft.Container(width=6),
                         ft.Icon(ft.Icons.LOCATION_ON, size=12, color='#78909C'),
                         ft.Text(ip, size=11, color='#455A64'),
-                        ft.Container(expand=True),
-                        ft.Icon(ft.Icons.ACCESS_TIME, size=11, color='#90A4AE'),
-                        ft.Text(f"活跃 {last_active or '无'}", size=9, color='#90A4AE'),
                     ], spacing=3, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                     # === 系统指标条 ===
                     ft.Row([
-                        self._metric_bar('CPU', cpu, '#1565C0', 80),
-                        self._metric_bar('内存', mem, '#8E24AA', 80),
-                        self._metric_bar('磁盘', disk_pct, '#00838F', 80),
-                    ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                       alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                        self._metric_bar('CPU', cpu, '#1565C0'),
+                        self._metric_bar('内存', mem, '#8E24AA'),
+                        self._metric_bar('磁盘', disk_pct, '#00838F'),
+                    ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                     # === 详细信息网格（全部字段，3列x多行） ===
                     ft.Container(
                         content=ft.Column([
@@ -366,18 +362,57 @@ class MachineStatusTab(AdminBaseTab):
                             # 第4行：版本与用户
                             ft.Row([
                                 self._info_item(ft.Icons.BUILD, '版本', version, '#757575'),
-                                self._info_item(ft.Icons.PERSON, '用户ID', str(uid) if uid > 0 else '未登录', '#1565C0'),
+                                self._info_item(ft.Icons.PERSON, '用户ID', str(uid) if uid > 0 else '-', '#1565C0'),
                                 self._info_item(ft.Icons.PERSON_OUTLINE, '用户名', db_username if uid > 0 else '未登录', '#1565C0'),
-                            ], spacing=4),
-                            # 第5行：时间类
-                            ft.Row([
-                                self._info_item(ft.Icons.FAVORITE, '心跳', heartbeat or '无', '#EF5350'),
-                                self._info_item(ft.Icons.POWER_SETTINGS_NEW, '最后关机', last_shutdown, '#757575'),
-                                self._info_item(ft.Icons.CREATE, '首次上报', created_at, '#757575'),
                             ], spacing=4),
                         ], spacing=3, tight=True),
                         padding=ft.padding.symmetric(horizontal=8, vertical=6),
                         bgcolor=ft.Colors.GREY_50, border_radius=6),
+                    # === 时间信息（纵向排列，美化） ===
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Container(
+                                content=ft.Row([
+                                    ft.Container(
+                                        content=ft.Icon(ft.Icons.ACCESS_TIME, size=14, color=ft.Colors.WHITE),
+                                        width=26, height=26, border_radius=13,
+                                        bgcolor='#78909C', alignment=ft.alignment.center),
+                                    ft.Text("最后活跃", size=10, color='#78909C', weight=ft.FontWeight.W_500, width=58),
+                                    ft.Container(width=1, height=16, bgcolor=ft.Colors.GREY_300),
+                                    ft.Text(last_active or '无', size=12, color='#263238', weight=ft.FontWeight.W_700),
+                                ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                                padding=ft.padding.symmetric(horizontal=6, vertical=4),
+                                bgcolor=ft.Colors.with_opacity(0.02, '#000000'), border_radius=6),
+                            ft.Container(
+                                content=ft.Row([
+                                    ft.Container(
+                                        content=ft.Icon(ft.Icons.FAVORITE, size=14, color=ft.Colors.WHITE),
+                                        width=26, height=26, border_radius=13,
+                                        bgcolor='#EF5350', alignment=ft.alignment.center),
+                                    ft.Text("心跳时间", size=10, color='#78909C', weight=ft.FontWeight.W_500, width=58),
+                                    ft.Container(width=1, height=16, bgcolor=ft.Colors.GREY_300),
+                                    ft.Text(heartbeat or '无', size=12, color='#263238', weight=ft.FontWeight.W_700),
+                                ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                                padding=ft.padding.symmetric(horizontal=6, vertical=4),
+                                border_radius=6),
+                            ft.Container(
+                                content=ft.Row([
+                                    ft.Container(
+                                        content=ft.Icon(ft.Icons.POWER_SETTINGS_NEW, size=14, color=ft.Colors.WHITE),
+                                        width=26, height=26, border_radius=13,
+                                        bgcolor='#757575', alignment=ft.alignment.center),
+                                    ft.Text("最后关机", size=10, color='#78909C', weight=ft.FontWeight.W_500, width=58),
+                                    ft.Container(width=1, height=16, bgcolor=ft.Colors.GREY_300),
+                                    ft.Text(last_shutdown or '无', size=12, color='#263238', weight=ft.FontWeight.W_700),
+                                ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                                padding=ft.padding.symmetric(horizontal=6, vertical=4),
+                                bgcolor=ft.Colors.with_opacity(0.02, '#000000'), border_radius=6),
+                        ], spacing=3, tight=True),
+                        padding=ft.padding.symmetric(horizontal=8, vertical=8),
+                        bgcolor=ft.Colors.with_opacity(0.02, '#1565C0'),
+                        border_radius=10,
+                        margin=ft.margin.only(top=4),
+                    ),
                     # === 前台应用（如果有） ===
                     *([ft.Container(
                         content=ft.Row([
@@ -409,32 +444,34 @@ class MachineStatusTab(AdminBaseTab):
         self._list_view.controls = tiles
         self.page.update()
 
-    def _metric_bar(self, label, pct, color, width=70):
-        """指标进度条"""
+    def _metric_bar(self, label, pct, color):
+        """指标进度条（填充长度与百分比精确对应）"""
         pct = max(0, min(100, float(pct or 0)))
-        bar_w = width - 10
+        fill = int(round(pct))
         return ft.Container(
             content=ft.Column([
                 ft.Row([
-                    ft.Text(label, size=9, color='#78909C', weight=ft.FontWeight.W_500),
+                    ft.Text(label, size=10, color='#78909C', weight=ft.FontWeight.W_600),
                     ft.Container(expand=True),
-                    ft.Text(f"{pct:.0f}%", size=9, color='#263238', weight=ft.FontWeight.W_700),
+                    ft.Text(f"{pct:.0f}%", size=11, color='#263238', weight=ft.FontWeight.W_800),
                 ], spacing=0),
-                ft.Container(
-                    content=ft.Container(width=bar_w * pct / 100, bgcolor=color, border_radius=2),
-                    width=bar_w, height=5, bgcolor=ft.Colors.GREY_200, border_radius=2),
-            ], spacing=2, tight=True),
-            width=width)
+                ft.Row([
+                    ft.Container(expand=fill, height=7, bgcolor=color, border_radius=3),
+                    ft.Container(expand=max(1, 100 - fill), height=7,
+                                 bgcolor=ft.Colors.GREY_200, border_radius=3),
+                ], spacing=0),
+            ], spacing=3, tight=True),
+            expand=1, padding=ft.padding.symmetric(horizontal=2))
 
     @staticmethod
     def _info_item(icon, label, value, color):
-        """详细信息项：图标 + 标签 + 值"""
+        """详细信息项：图标 + 标签 + 值（完全显示，不省略）"""
         return ft.Container(
             content=ft.Row([
-                ft.Icon(icon, size=11, color=color),
+                ft.Icon(icon, size=12, color=color),
                 ft.Text(f"{label}:", size=9, color='#90A4AE'),
-                ft.Text(str(value)[:12], size=9, color='#455A64', weight=ft.FontWeight.W_600,
-                        overflow=ft.TextOverflow.ELLIPSIS),
+                ft.Text(str(value), size=10, color='#455A64', weight=ft.FontWeight.W_600,
+                        no_wrap=False),
             ], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             expand=True)
 
