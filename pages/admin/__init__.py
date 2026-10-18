@@ -23,6 +23,7 @@ from pages.admin.message_admin import MessageAdminTab
 from pages.admin.remote_control import RemoteControlTab
 from pages.admin.machine_status import MachineStatusTab
 from pages.admin.monitor_events import MonitorEventsTab
+from pages.admin.app_usage import AppUsageTab
 
 
 class AdminPage:
@@ -56,6 +57,7 @@ class AdminPage:
             ("远程控制", ft.Icons.CAST, RemoteControlTab),
             ("机器状态", ft.Icons.COMPUTER, MachineStatusTab),
             ("监控事件", ft.Icons.EVENT_NOTE, MonitorEventsTab),
+            ("应用使用", ft.Icons.APPS, AppUsageTab),
             ("管理日志", ft.Icons.ADMIN_PANEL_SETTINGS, AdminLogsTab),
         ]
         self._tab_instances = {}   # {index: tab_instance}

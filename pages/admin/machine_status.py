@@ -117,7 +117,43 @@ class MachineStatusTab(AdminBaseTab):
                     "SELECT * FROM machine_status ORDER BY last_heartbeat DESC")
                 # 批量查询对应用户的详细信息
                 user_info = {}
+                # machine_id -> 活跃会话映射（用于current_user_id=0时通过device_id查找）
+                machine_sessions = {}
+
+                # 收集所有 machine_id
+                machine_ids = [r.get('machine_id', '') for r in (rows or []) if r.get('machine_id')]
+                # 收集所有 current_user_id > 0
                 uids = [r.get('current_user_id', 0) for r in (rows or []) if r.get('current_user_id', 0) > 0]
+
+                # 1. 按 machine_id 查询最近活跃会话（device_id = machine_id, is_active=1）
+                if machine_ids:
+                    try:
+                        m_placeholders = ','.join(['?'] * len(machine_ids))
+                        msrows = self.db.fetch_all(
+                            f"SELECT s.user_id, s.device_id, s.login_time, s.logout_time, s.is_active, s.last_heartbeat "
+                            f"FROM user_sessions s "
+                            f"INNER JOIN (SELECT device_id, MAX(login_time) as max_login "
+                            f"FROM user_sessions WHERE device_id IN ({m_placeholders}) GROUP BY device_id) latest "
+                            f"ON s.device_id=latest.device_id AND s.login_time=latest.max_login "
+                            f"WHERE s.is_active = 1", machine_ids)
+                        for sr in (msrows or []):
+                            mid = sr.get('device_id', '')
+                            if mid:
+                                machine_sessions[mid] = {
+                                    'user_id': sr.get('user_id'),
+                                    'login_time': sr.get('login_time'),
+                                    'logout_time': sr.get('logout_time'),
+                                    'is_active': sr.get('is_active', 0),
+                                    'last_heartbeat': sr.get('last_heartbeat'),
+                                }
+                                # 把这个user_id加入查询列表
+                                uid_val = sr.get('user_id')
+                                if uid_val and int(uid_val) > 0 and int(uid_val) not in uids:
+                                    uids.append(int(uid_val))
+                    except Exception:
+                        pass
+
+                # 2. 查询用户详细信息
                 if uids:
                     placeholders = ','.join(['?'] * len(uids))
                     urows = self.db.fetch_all(
@@ -128,7 +164,7 @@ class MachineStatusTab(AdminBaseTab):
                     # 批量查询每个用户最新的登录会话（user_sessions）
                     try:
                         srows = self.db.fetch_all(
-                            f"SELECT s.user_id, s.login_time, s.logout_time, s.is_active "
+                            f"SELECT s.user_id, s.login_time, s.logout_time, s.is_active, s.last_heartbeat "
                             f"FROM user_sessions s "
                             f"INNER JOIN (SELECT user_id, MAX(login_time) as max_login FROM user_sessions WHERE user_id IN ({placeholders}) GROUP BY user_id) latest "
                             f"ON s.user_id=latest.user_id AND s.login_time=latest.max_login", uids)
@@ -138,13 +174,14 @@ class MachineStatusTab(AdminBaseTab):
                                 user_info[uid]['_session_login_time'] = sr.get('login_time')
                                 user_info[uid]['_session_logout_time'] = sr.get('logout_time')
                                 user_info[uid]['_session_is_active'] = sr.get('is_active', 0)
+                                user_info[uid]['_session_last_heartbeat'] = sr.get('last_heartbeat')
                     except Exception:
                         pass  # user_sessions 表不存在时忽略
-                return rows, user_info, None
+                return rows, user_info, machine_sessions, None
             except Exception as e:
-                return None, {}, str(e)
+                return None, {}, {}, str(e)
 
-        rows, user_info, err = await asyncio.to_thread(_query)
+        rows, user_info, machine_sessions, err = await asyncio.to_thread(_query)
         self._loading_ring.visible = False
         try:
             if self._loading_ring.page is not None:
@@ -192,8 +229,47 @@ class MachineStatusTab(AdminBaseTab):
             online_color = '#43A047' if is_online else '#9E9E9E'
             online_text = '电脑在线' if is_online else f'电脑离线({int(hb_age//60)}分前)'
 
-            # 登录状态判断：区分"电脑离线"和"登录离线（电脑在线但未登录学习程序）"
-            is_logged_in = uid > 0  # 只要有user_id即认为已登录（用户名从users表取）
+            # 登录状态判断：优先用uid，uid=0时通过machine_id查找活跃会话
+            sess_hb = uinfo.get('_session_last_heartbeat')
+            sess_logout = uinfo.get('_session_logout_time')
+            sess_active = uinfo.get('_session_is_active')
+
+            # uid=0时，通过machine_id查找活跃会话（桌面端未上报current_user_id的情况）
+            if uid == 0 and mid in machine_sessions:
+                ms = machine_sessions[mid]
+                ms_uid = ms.get('user_id')
+                if ms_uid and int(ms_uid) > 0:
+                    ms_uid = int(ms_uid)
+                    # 检查该会话心跳是否在2分钟内
+                    ms_hb = ms.get('last_heartbeat')
+                    if ms_hb:
+                        try:
+                            hb_dt = datetime.datetime.strptime(str(ms_hb)[:19], '%Y-%m-%d %H:%M:%S')
+                            if (now - hb_dt).total_seconds() < 120:
+                                uid = ms_uid
+                                uinfo = user_info.get(uid, {})
+                                sess_hb = ms_hb
+                                sess_logout = ms.get('logout_time')
+                                sess_active = ms.get('is_active', 0)
+                        except Exception:
+                            pass
+
+            if uid > 0:
+                # 有user_id，检查session是否明确已退出（is_active=0且有logout_time）
+                if sess_active is not None and int(sess_active) == 0 and sess_logout:
+                    is_logged_in = False
+                else:
+                    is_logged_in = True
+            else:
+                is_logged_in = False
+            # 心跳活跃状态（用于显示"活跃中"还是"后台"，不影响登录判断）
+            is_active_now = False
+            if is_logged_in and sess_hb:
+                try:
+                    hb_dt = datetime.datetime.strptime(str(sess_hb)[:19], '%Y-%m-%d %H:%M:%S')
+                    is_active_now = (now - hb_dt).total_seconds() < 120
+                except Exception:
+                    pass
             # 优先用users表的用户名和昵称
             db_username = uinfo.get('username') or uname or f"用户{uid}"
             if not is_online:
@@ -205,9 +281,14 @@ class MachineStatusTab(AdminBaseTab):
                 # 电脑在线 + 已登录学习程序（显示用户名+昵称）
                 nickname = uinfo.get('nickname') or ''
                 display_name = f"{db_username}({nickname})" if nickname else db_username
-                login_label = f"学习中: {display_name}"
-                login_color = '#43A047'
-                login_icon = ft.Icons.SCHOOL
+                if is_active_now:
+                    login_label = f"学习中: {display_name}"
+                    login_color = '#43A047'
+                    login_icon = ft.Icons.SCHOOL
+                else:
+                    login_label = f"后台: {display_name}"
+                    login_color = '#FB8C00'
+                    login_icon = ft.Icons.BACKGROUND_DOT
             elif status in ('locked', 'login_screen'):
                 # 电脑在线 + 锁屏/登录页（蓝色，区别于离线的灰色）
                 login_label = '锁屏中' if status == 'locked' else '登录页'
@@ -233,27 +314,16 @@ class MachineStatusTab(AdminBaseTab):
             # 开机时长格式化
             uptime_str = self._fmt_duration(uptime_sec)
             # 本次登录学习后的时长（优先用 user_sessions.login_time，回退到 users.last_login_date）
-            if uid > 0:
+            if uid > 0 and is_logged_in:
                 sess_login = uinfo.get('_session_login_time')
-                sess_logout = uinfo.get('_session_logout_time')
-                sess_active = uinfo.get('_session_is_active', 0)
                 if sess_login:
                     try:
-                        # login_time 是 DATETIME 字符串（如 "2026-08-18 18:30:21"）
                         lt = datetime.datetime.strptime(str(sess_login)[:19], '%Y-%m-%d %H:%M:%S')
-                        if sess_logout and int(sess_active) == 0:
-                            # 已退出：显示退出时的会话时长
-                            logout_dt = datetime.datetime.strptime(str(sess_logout)[:19], '%Y-%m-%d %H:%M:%S')
-                            login_sec = int((logout_dt - lt).total_seconds())
-                            login_str = f"{self._fmt_duration(login_sec)}(已退出)"
-                        else:
-                            # 活跃中：当前时间 - 登录时间
-                            login_sec = int((now - lt).total_seconds())
-                            login_str = self._fmt_duration(login_sec) if login_sec > 0 else "刚登录"
+                        login_sec = int((now - lt).total_seconds())
+                        login_str = self._fmt_duration(login_sec) if login_sec > 0 else "刚登录"
                     except Exception:
                         login_str = "未知"
                 else:
-                    # 回退到 users.last_login_date
                     last_login = uinfo.get('last_login_date', '') or ''
                     if last_login:
                         try:
@@ -264,6 +334,8 @@ class MachineStatusTab(AdminBaseTab):
                             login_str = "未知"
                     else:
                         login_str = "未知"
+            elif uid > 0 and not is_logged_in:
+                login_str = "已退出"
             else:
                 login_str = "未登录"
 
